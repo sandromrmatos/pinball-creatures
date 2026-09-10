@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Pinball Creatures — smoke test</title>
+<style>
+  body { font: 13px/1.55 ui-monospace, Consolas, monospace; background: #0b1024; color: #dfe4f5; padding: 16px; }
+  .pass { color: #4ade80; } .fail { color: #ff6b6b; font-weight: 700; } .note { color: #8b93ad; }
+  h2 { color: #b07cff; margin: 16px 0 6px; font-size: 14px; }
+  #summary { font-size: 15px; font-weight: 700; margin-bottom: 12px; padding: 8px; border: 1px solid #2b3350; }
+  iframe { width: 390px; height: 780px; border: 1px solid #2b3350; margin-top: 14px; background: #000; }
+</style>
+</head>
+<body>
+<!--
+  Boots the REAL index.html in an iframe and checks it actually came up.
+
+  The unit tests in selftest.html import the modules directly, which proves the
+  logic works but says nothing about whether the app starts: a typo in an id, a
+  missing element, a module that throws on import, a renderer pointed at a
+  canvas of zero size. All of those pass the unit tests and leave a black
+  screen. This is the check for that.
+
+  Same-origin, so the iframe's window and document are readable — which is what
+  lets errors inside it be captured rather than guessed at.
+
+  Run with tools\run-smoke.ps1.
+-->
+<div id="summary">RUNNING</div>
+<div id="out"></div>
+<iframe id="app-frame" src="./index.html" title="app under test"></iframe>
+
+<script type="module">
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+const report = [];
+let currentGroup = '';
+
+function group(name) {
+  currentGroup = name;
+  report.push({ kind: 'group', text: name });
+  out.append(Object.assign(document.createElement('h2'), { textContent: name }));
+}
+
+function check(label, ok, detail = '') {
+  report.push({ kind: ok ? 'pass' : 'fail', group: currentGroup, label, detail: String(detail) });
+  const d = document.createElement('div');
+  d.className = ok ? 'pass' : 'fail';
+  d.textContent = `${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? '  == ' + detail : ''}`;
+  out.append(d);
+  ok ? pass++ : fail++;
+  return ok;
+}
+
+function note(text) {
+  report.push({ kind: 'note', text: String(text) });
+  const d = document.createElement('div');
+  d.className = 'note';
+  d.textContent = '      ' + text;
+  out.append(d);
+}
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+/* ---------------------------------------------------------------
+   Capture everything that goes wrong inside the frame
+   --------------------------------------------------------------- */
+
+const frame = document.getElementById('app-frame');
+const errors = [];
+const warnings = [];
+
+/**
+ * Hook the iframe as early as possible. `load` is too late for a module that
+ * throws while it is being evaluated, so this also patches console as soon as
+ * the frame's window exists.
+ */
+function hook(win) {
+  if (!win || win.__hooked) return;
+  win.__hooked = true;
+
+  win.addEventListener('error', e => {
+    errors.push(e.message + (e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : ''));
+  });
+  win.addEventListener('unhandledrejection', e => {
+    errors.push('unhandled rejection: ' + (e.reason?.message || e.reason));
+  });
+
+  const realError = win.console.error.bind(win.console);
+  win.console.error = (...args) => { errors.push(args.map(String).join(' ')); realError(...args); };
+
+  const realWarn = win.console.warn.bind(win.console);
+  win.console.warn = (...args) => { warnings.push(args.map(String).join(' ')); realWarn(...args); };
+}
+
+// Poll for the frame's window, since it is replaced during navigation.
+const hookTimer = setInterval(() => { try { hook(frame.contentWindow); } catch { /* not ready */ } }, 10);
+
+async function run() {
+  /**
+   * Wait for the iframe's *real* document, identified by an element only
+   * index.html has.
+   *
+   * Neither the `load` event nor readyState is enough on its own. A fresh
+   * iframe starts life on about:blank, which is already 'complete', so the
+   * obvious wait resolves instantly against the wrong document — and because
+   * navigation replaces contentDocument with a new object, anything captured
+   * at that moment stays pointing at the blank one forever. That produced a
+   * report claiming all 43 elements were missing while the app was in fact
+   * running perfectly.
+   */
+  let doc = null;
+  for (let i = 0; i < 300; i++) {                 // up to 30 s
+    const d = frame.contentDocument;
+    if (d && d.getElementById('boot') && d.readyState !== 'loading') { doc = d; break; }
+    await wait(100);
+  }
+
+  clearInterval(hookTimer);
+
+  if (!doc) {
+    check('index.html loads in the frame', false, 'no document with #boot appeared');
+    return;
+  }
+  check('index.html loads in the frame', true);
+
+  const win = frame.contentWindow;
+
+  /* =====================================================
+     Boot
+     ===================================================== */
+  group('boot');
+
+  // The app awaits the CSVs and IndexedDB, so give it a moment past `load`.
+  let bootedIn = null;
+  for (let i = 0; i < 120; i++) {                 // up to 12 s
+    const app = doc.getElementById('app');
+    if (app && !app.classList.contains('hidden')) { bootedIn = i * 100; break; }
+    await wait(100);
+  }
+
+  const bootEl = doc.getElementById('boot');
+  const bootMsg = bootEl?.querySelector('#boot-msg')?.textContent || '';
+
+  check('the app becomes visible', bootedIn !== null,
+        bootedIn === null ? `still on the boot screen: "${bootMsg}"` : `after ${bootedIn} ms`);
+  check('the boot screen is dismissed', !!bootEl?.classList.contains('gone'));
+  check('boot did not fail', !bootEl?.classList.contains('failed'), bootMsg);
+
+  if (bootedIn === null) {
+    note('nothing below can be trusted until the app boots');
+  }
+
+  /* =====================================================
+     Errors
+     ===================================================== */
+  group('console');
+  check('nothing threw during boot', errors.length === 0, errors.slice(0, 4).join(' | '));
+  if (warnings.length) note(`${warnings.length} warning(s): ${warnings.slice(0, 3).join(' | ')}`);
+  else note('no warnings');
+
+  /* =====================================================
+     Shell
+     ===================================================== */
+  group('shell');
+  {
+    // Every id the modules reach for. A missing one is a silent black screen,
+    // because main.js writes into them without checking.
+    const ids = [
+      'app', 'screen-table', 'screen-collection', 'screen-scores', 'screen-profile',
+      'table', 'table-wrap', 'hud',
+      'hud-score', 'hud-mode', 'hud-ball', 'hud-balls', 'hud-mult', 'hud-disc',
+      'hud-bank', 'hud-lanes', 'hud-armed', 'hud-sub', 'hud-sub-label',
+      'hud-sub-time', 'hud-sub-bar', 'hud-save', 'hud-tilt',
+      'hud-kb-left', 'hud-kb-right',
+      'collection-body', 'scores-body', 'profile-body',
+      'sheet-mode', 'mode-body', 'sheet-species', 'species-body',
+      'sheet-shift', 'shift-body', 'sheet-reveal', 'reveal-body',
+      'sheet-gameover', 'gameover-body', 'sheet-help', 'help-body',
+      'toasts', 'btn-help', 'btn-modes'
+    ];
+    const missing = ids.filter(id => !doc.getElementById(id));
+    check(`all ${ids.length} expected elements exist`, missing.length === 0, missing.join(', '));
+
+    check('there are four nav buttons', doc.querySelectorAll('.nav-btn').length === 4,
+          String(doc.querySelectorAll('.nav-btn').length));
+    check('both flipper buttons exist', doc.querySelectorAll('[data-flip]').length === 2);
+    check('the stylesheet applied', win.getComputedStyle(doc.body).overflowY === 'hidden',
+          win.getComputedStyle(doc.body).overflowY);
+  }
+
+  /* =====================================================
+     Canvas
+     ===================================================== */
+  group('canvas');
+  {
+    const canvas = doc.getElementById('table');
+    check('the canvas has a backing store', canvas.width > 0 && canvas.height > 0,
+          `${canvas.width}x${canvas.height}`);
+    check('it fills its container', canvas.clientWidth > 200 && canvas.clientHeight > 300,
+          `${canvas.clientWidth}x${canvas.clientHeight}`);
+
+    // Something must actually be drawn. An all-black canvas is the failure this
+    // whole file exists to catch.
+    await wait(400);
+    const probe = doc.createElement('canvas');
+    probe.width = canvas.width;
+    probe.height = canvas.height;
+    const pctx = probe.getContext('2d');
+    pctx.drawImage(canvas, 0, 0);
+    const data = pctx.getImageData(0, 0, probe.width, probe.height).data;
+
+    let lit = 0;
+    const seen = new Set();
+    for (let i = 0; i < data.length; i += 4 * 97) {          // sample, do not scan
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (r + g + b > 40) lit++;
+      seen.add(`${r >> 4},${g >> 4},${b >> 4}`);
+    }
+    check('the table is drawn, not blank', lit > 20, `${lit} lit samples`);
+    check('it has more than one colour in it', seen.size > 6, `${seen.size} distinct`);
+  }
+
+  /* =====================================================
+     Menu and starting a game
+     ===================================================== */
+  group('mode picker');
+  {
+    const sheet = doc.getElementById('sheet-mode');
+    check('the mode picker is open at boot', !sheet.classList.contains('hidden'));
+
+    const cards = doc.querySelectorAll('#mode-body .mode-card');
+    check('there is a card per mode', cards.length === 5, String(cards.length));
+    check('each card names its table',
+          [...cards].every(c => (c.textContent || '').trim().length > 10));
+
+    // Start a game the way a player would.
+    cards[0].click();
+    await wait(500);
+
+    check('the picker closed', sheet.classList.contains('hidden'));
+    check('the HUD appeared', !doc.getElementById('hud').classList.contains('hidden'));
+    check('the score reads zero', doc.getElementById('hud-score').textContent === '0',
+          doc.getElementById('hud-score').textContent);
+    check('three balls are shown', doc.getElementById('hud-balls').textContent === '\u25cf\u25cf\u25cf',
+          JSON.stringify(doc.getElementById('hud-balls').textContent));
+    check('the CATCH letters were built',
+          doc.getElementById('hud-bank').childElementCount === 5,
+          String(doc.getElementById('hud-bank').childElementCount));
+    check('the lane letters were built',
+          doc.getElementById('hud-lanes').childElementCount === 3);
+  }
+
+  /* =====================================================
+     Playing
+     ===================================================== */
+  group('playing');
+  {
+    const wrap = doc.getElementById('table-wrap');
+    const rect = wrap.getBoundingClientRect();
+
+    const mouse = (type, x, y) => wrap.dispatchEvent(new win.MouseEvent(type, {
+      clientX: x, clientY: y, bubbles: true, cancelable: true
+    }));
+
+    // Plunge: press and release.
+    mouse('mousedown', rect.left + rect.width / 2, rect.top + rect.height * 0.8);
+    await wait(320);
+    win.dispatchEvent(new win.MouseEvent('mouseup', { bubbles: true }));
+    await wait(1400);
+
+    // Work the flippers for a couple of seconds and make sure it survives.
+    for (let i = 0; i < 14; i++) {
+      const x = rect.left + rect.width * (i % 2 ? 0.25 : 0.75);
+      mouse('mousedown', x, rect.top + rect.height * 0.9);
+      await wait(70);
+      win.dispatchEvent(new win.MouseEvent('mouseup', { bubbles: true }));
+      await wait(70);
+    }
+    await wait(600);
+
+    check('still no errors after playing', errors.length === 0, errors.slice(0, 3).join(' | '));
+
+    const score = doc.getElementById('hud-score').textContent;
+    check('the score is a number', /^[\d,]+$/.test(score), score);
+    note(`score after a short play: ${score}`);
+
+    // The canvas must still be alive, i.e. the render loop did not die.
+    const canvas = doc.getElementById('table');
+    check('the canvas is still sized', canvas.width > 0 && canvas.height > 0);
+  }
+
+  /* =====================================================
+     Screens
+     ===================================================== */
+  group('screens');
+  {
+    for (const name of ['collection', 'scores', 'profile', 'table']) {
+      const btn = doc.querySelector(`.nav-btn[data-screen="${name}"]`);
+      btn.click();
+      await wait(280);
+      const screen = doc.getElementById(`screen-${name}`);
+      check(`${name} opens`, screen.classList.contains('active'));
+      check(`  ${name} rendered something`,
+            name === 'table' || (screen.textContent || '').trim().length > 20,
+            `${(screen.textContent || '').trim().length} chars`);
+    }
+    check('no errors from the screens', errors.length === 0, errors.slice(0, 3).join(' | '));
+  }
+
+  group('collection');
+  {
+    doc.querySelector('.nav-btn[data-screen="collection"]').click();
+    await wait(320);
+
+    const cells = doc.querySelectorAll('#collection-body .cell');
+    check('the grid is populated', cells.length > 10, `${cells.length} cells`);
+    check('there are five type tabs',
+          doc.querySelectorAll('#collection-body .type-tab').length === 5);
+
+    // Switching type must re-render rather than throw.
+    const tabs = doc.querySelectorAll('#collection-body .type-tab');
+    tabs[3].click();
+    await wait(260);
+    check('switching type works', doc.querySelectorAll('#collection-body .cell').length > 5);
+
+    // The shiny toggle is the other axis of this view.
+    const shinyBtn = [...doc.querySelectorAll('#collection-body .mini-btn')]
+      .find(b => (b.textContent || '').includes('Shiny'));
+    shinyBtn?.click();
+    await wait(260);
+    check('the shiny toggle works', !!doc.querySelector('#collection-body .cell'));
+    shinyBtn?.click();
+    await wait(200);
+
+    // Opening a creature must fill the sheet.
+    doc.querySelector('#collection-body .cell')?.click();
+    await wait(300);
+    const sheet = doc.getElementById('sheet-species');
+    check('the species sheet opens', !sheet.classList.contains('hidden'));
+    check('and has content', (doc.getElementById('species-body').textContent || '').length > 20);
+    doc.querySelector('#sheet-species .sheet-close')?.click();
+    await wait(200);
+    check('and closes again', sheet.classList.contains('hidden'));
+
+    check('no errors from the Collection', errors.length === 0, errors.slice(0, 3).join(' | '));
+  }
+
+  group('help and the full guide');
+  {
+    doc.querySelector('.nav-btn[data-screen="table"]').click();
+    await wait(200);
+
+    doc.getElementById('btn-help').click();
+    await wait(300);
+    check('help opens', !doc.getElementById('sheet-help').classList.contains('hidden'));
+    check('help has rules', doc.querySelectorAll('#help-body .rule').length > 5,
+          String(doc.querySelectorAll('#help-body .rule').length));
+
+    const guideBtn = [...doc.querySelectorAll('#help-body .btn')]
+      .find(b => (b.textContent || '').toLowerCase().includes('guide'));
+    check('there is a button through to the full guide', !!guideBtn,
+          guideBtn?.textContent || '');
+
+    guideBtn?.click();
+    await wait(350);
+
+    const guide = doc.getElementById('sheet-guide');
+    check('the full guide opens', !guide.classList.contains('hidden'));
+
+    const sections = doc.querySelectorAll('#guide-body .g-section');
+    check('the guide is split into sections', sections.length >= 10, `${sections.length} sections`);
+    check('every section has a heading',
+          [...sections].every(s => (s.querySelector('summary')?.textContent || '').trim().length > 3));
+
+    // The sections start closed, so the text has to be there rather than
+    // rendered on open.
+    const text = doc.getElementById('guide-body').textContent || '';
+    check('the guide is substantial', text.length > 4000, `${text.length} chars`);
+
+    // It must talk about every feature by name, and pull real numbers rather
+    // than restating them — a guide that drifts from the game is worse than none.
+    const topics = ['Flipper', 'Encounter', 'Evolution', 'Awakening Gate', 'spinner',
+                    'kickback', 'Tilt', 'Collection', 'shiny', 'Ball save',
+                    'multiplier', 'Extra balls', 'offline', 'ramp', 'Master Disc',
+                    'Wildwood Green', 'Rune Sanctum', 'Gale Spire', 'Starbloom Grove',
+                    'Cogwork Foundry'];
+    const absent = topics.filter(t => !text.toLowerCase().includes(t.toLowerCase()));
+    check('it covers every feature', absent.length === 0, absent.join(', '));
+
+    check('it has reference tables', doc.querySelectorAll('#guide-body .g-table').length >= 3,
+          String(doc.querySelectorAll('#guide-body .g-table').length));
+
+    // Sections open and close.
+    const first = sections[0];
+    first.querySelector('summary').click();
+    await wait(150);
+    check('a section can be opened', first.open === true);
+
+    doc.querySelector('#sheet-guide .sheet-close').click();
+    await wait(200);
+    check('the guide closes', guide.classList.contains('hidden'));
+    doc.querySelector('#sheet-help .sheet-close').click();
+    await wait(200);
+    check('no errors from the guide', errors.length === 0, errors.slice(0, 3).join(' | '));
+  }
+
+  group('a sheet freezes the table');
+  {
+    /**
+     * The bug this guards: a capture reveal appeared over a live table, so
+     * reading it cost you the ball you had just caught something with.
+     *
+     * Checked by pixels rather than by reaching into the game, because that is
+     * what the player experiences. Every animation on the table is driven by the
+     * world clock, which only advances while the game is running, so a paused
+     * table is pixel-identical frame to frame.
+     */
+    doc.querySelector('.nav-btn[data-screen="table"]').click();
+    await wait(250);
+
+    const canvas = doc.getElementById('table');
+    const snap = () => {
+      const p = doc.createElement('canvas');
+      p.width = canvas.width;
+      p.height = canvas.height;
+      p.getContext('2d').drawImage(canvas, 0, 0);
+      const d = p.getContext('2d').getImageData(0, 0, p.width, p.height).data;
+      let h = 2166136261;
+      for (let i = 0; i < d.length; i += 4 * 31) { h = ((h ^ d[i]) * 16777619) >>> 0; }
+      return h;
+    };
+
+    // Make sure there is actually a ball in motion to freeze.
+    const wrap = doc.getElementById('table-wrap');
+    const rect = wrap.getBoundingClientRect();
+    wrap.dispatchEvent(new win.MouseEvent('mousedown', {
+      clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height * 0.8,
+      bubbles: true, cancelable: true
+    }));
+    await wait(300);
+    win.dispatchEvent(new win.MouseEvent('mouseup', { bubbles: true }));
+    await wait(250);
+
+    const moveA = snap();
+    await wait(320);
+    const moveB = snap();
+    check('the table animates while playing', moveA !== moveB, `${moveA} vs ${moveB}`);
+
+    // Now cover it.
+    doc.getElementById('btn-help').click();
+    await wait(400);
+    const pausedA = snap();
+    await wait(700);
+    const pausedB = snap();
+    check('the table freezes while a sheet is open', pausedA === pausedB,
+          `${pausedA} vs ${pausedB}`);
+
+    doc.querySelector('#sheet-help .sheet-close').click();
+    await wait(400);
+    const afterA = snap();
+    await wait(320);
+    const afterB = snap();
+    check('and it starts again when the sheet closes', afterA !== afterB,
+          `${afterA} vs ${afterB}`);
+
+    // A long read must not cost the ball.
+    const ballBefore = doc.getElementById('hud-balls').textContent;
+    doc.getElementById('btn-help').click();
+    await wait(2600);
+    doc.querySelector('#sheet-help .sheet-close').click();
+    await wait(300);
+    check('a long read does not cost a ball',
+          doc.getElementById('hud-balls').textContent === ballBefore,
+          `${JSON.stringify(ballBefore)} -> ${JSON.stringify(doc.getElementById('hud-balls').textContent)}`);
+
+    check('no errors around pausing', errors.length === 0, errors.slice(0, 3).join(' | '));
+  }
+
+  /* =====================================================
+     Offline plumbing
+     ===================================================== */
+  group('pwa');
+  {
+    const link = doc.querySelector('link[rel="manifest"]');
+    check('a manifest is linked', !!link, link?.getAttribute('href'));
+
+    const res = await fetch('manifest.webmanifest');
+    check('the manifest loads', res.ok, `HTTP ${res.status}`);
+    const mf = await res.json();
+    check('it has a name and start_url', !!mf.name && !!mf.start_url);
+    check('it is portrait and standalone',
+          mf.display === 'standalone' && mf.orientation === 'portrait');
+
+    const big = (mf.icons || []).some(i => /512/.test(i.sizes));
+    const maskable = (mf.icons || []).some(i => (i.purpose || '').includes('maskable'));
+    check('there is a 512px icon', big);
+    check('there is a maskable icon', maskable);
+    for (const icon of mf.icons || []) {
+      const r = await fetch(icon.src, { method: 'HEAD' });
+      check(`  ${icon.src} exists`, r.ok, `HTTP ${r.status}`);
+    }
+
+    const pc = await fetch('precache.json');
+    check('the precache list loads', pc.ok, `HTTP ${pc.status}`);
+    if (pc.ok) {
+      const list = await pc.json();
+      check('it covers every sprite', list.count === 158, String(list.count));
+      check('paths are URL-encoded like the game asks for them',
+            list.assets.some(a => a.includes('%20')));
+      // Spot-check that a listed path really resolves.
+      const probe = await fetch(list.assets[0], { method: 'HEAD' });
+      check(`  ${list.assets[0]} resolves`, probe.ok, `HTTP ${probe.status}`);
+      note(`precache: ${list.count} assets, ${(list.bytes / 1048576).toFixed(1)} MB`);
+    }
+
+    const sw = await fetch('sw.js');
+    check('the service worker file is served', sw.ok, `HTTP ${sw.status}`);
+    const swText = sw.ok ? await sw.text() : '';
+    check('every module is in its CORE list',
+          ['main', 'data', 'state', 'persist', 'physics', 'table', 'render', 'game', 'views', 'audio', 'ui']
+            .every(m => swText.includes(`js/${m}.js`)));
+    check('the CSVs are in CORE', swText.includes('Elemental Awakening Creatures.csv'));
+    check('the icons are in CORE', swText.includes('icons/icon-512.png'));
+  }
+
+  group('final');
+  check('no errors at all', errors.length === 0, errors.join(' | '));
+}
+
+async function post(summary, threw) {
+  const body = JSON.stringify({ summary, pass, fail, threw: threw || null, report }, null, 1);
+  try { await fetch('/__result', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } }); }
+  catch { /* opened by hand; the page is the report */ }
+}
+
+run().then(() => {
+  const summary = fail === 0 ? `ALL ${pass} CHECKS PASSED` : `${fail} FAILED, ${pass} passed`;
+  const s = document.getElementById('summary');
+  s.textContent = summary;
+  s.className = fail === 0 ? 'pass' : 'fail';
+  return post(summary, null);
+}).catch(err => {
+  const threw = err && err.stack ? err.stack : String(err);
+  const s = document.getElementById('summary');
+  s.textContent = `THREW after ${pass} passing checks`;
+  s.className = 'fail';
+  fail++;
+  return post(`THREW after ${pass} passing checks`, threw);
+});
+</script>
+</body>
+</html>

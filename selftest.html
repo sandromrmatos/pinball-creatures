@@ -1,0 +1,2112 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Pinball Creatures â€” self test</title>
+<style>
+  body { font: 13px/1.55 ui-monospace, Consolas, monospace; background: #0b1024; color: #dfe4f5; padding: 16px; }
+  .pass { color: #4ade80; }
+  .fail { color: #ff6b6b; font-weight: 700; }
+  .note { color: #8b93ad; }
+  h2 { color: #b07cff; margin: 18px 0 6px; font-size: 14px; }
+  #summary { font-size: 15px; font-weight: 700; margin-bottom: 12px; padding: 8px; border: 1px solid #2b3350; }
+</style>
+</head>
+<body>
+<!--
+  Headless test harness. Lives at the project root, not in tools/, because
+  data.js fetches the CSVs with document-relative paths â€” the same paths
+  index.html will use. From tools/ they resolve to /tools/*.csv and 404.
+
+  Run it with tools\run-selftest.ps1, or by hand:
+      python -m http.server 8123 --bind 127.0.0.1
+      chrome --headless --disable-gpu --virtual-time-budget=30000 \
+             --dump-dom http://127.0.0.1:8123/selftest.html
+
+  Output is ASCII only: it comes back through a PowerShell pipe, and box
+  characters or em dashes arrive as mojibake and make failures hard to read.
+
+  Everything is written into the DOM rather than the console so --dump-dom
+  captures it. #summary starts as RUNNING and is only ever replaced, so a
+  module that throws on import leaves RUNNING behind and the run is visibly
+  a failure rather than silently empty.
+-->
+<div id="summary">RUNNING</div>
+<div id="out"></div>
+
+<script type="module">
+import {
+  loadDatabase, DB, TYPES, MODES, RARITY_WEIGHTS, BOSS_OVERRIDES,
+  bossOf, rollEncounter, speciesByName, lineagePath,
+  familyMembers, effectiveRarityOf, parseCSV, CAPTURE_METER, DISC_TIERS,
+  MAX_DISC_TIER, MAX_MULTIPLIER, GATE_CATCHES_NEEDED, EVOLUTION_SHARDS,
+  EXTRA_BALL_AT, SCORE
+} from './js/data.js';
+
+import {
+  World, Ball, Flipper, Rotor, segment, circle, arc, field, sensorCircle,
+  PHYS_DT, MAX_SPEED, TABLE_W, vdist, vec
+} from './js/physics.js';
+
+import { buildTable, newBall, launchImpulse, LAYOUT } from './js/table.js';
+
+import { Renderer, getSprite, spriteReady } from './js/render.js';
+
+import {
+  Game, PHASE, BALL_LOST_PAUSE, SPINS_PER_SHIFT,
+  SAUCER_KICK, SAUCER_RELOCK_MS, SAUCER_MAX_ESCALATION, SEARCH_AFTER_MS
+} from './js/game.js';
+
+import { blankSave, store } from './js/state.js';
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+
+/* Every line is recorded as well as rendered, so the run can be posted back
+   to the test server. The DOM copy is for reading it in a real browser. */
+const report = [];
+let currentGroup = '';
+
+function group(name) {
+  currentGroup = name;
+  report.push({ kind: 'group', text: name });
+  out.append(Object.assign(document.createElement('h2'), { textContent: name }));
+}
+
+function check(label, ok, detail = '') {
+  report.push({ kind: ok ? 'pass' : 'fail', group: currentGroup, label, detail: String(detail) });
+  const d = document.createElement('div');
+  d.className = ok ? 'pass' : 'fail';
+  d.textContent = `${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? '  == ' + detail : ''}`;
+  out.append(d);
+  ok ? pass++ : fail++;
+  return ok;
+}
+
+function note(text) {
+  report.push({ kind: 'note', text: String(text) });
+  const d = document.createElement('div');
+  d.className = 'note';
+  d.textContent = '      ' + text;
+  out.append(d);
+}
+
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+
+async function run() {
+  /* =====================================================
+     CSV parser
+     ===================================================== */
+  group('parseCSV');
+  {
+    const rows = parseCSV('a,b,c\r\n1,"two, still two",3\r\n4,"say ""hi""",6\r\n\r\n');
+    check('row count ignores blank lines', rows.length === 3, `got ${rows.length}`);
+    check('quoted comma kept in one field', rows[1][1] === 'two, still two', rows[1][1]);
+    check('doubled quote unescaped', rows[2][1] === 'say "hi"', rows[2][1]);
+
+    const bom = parseCSV('\uFEFFid,name\n1,x\n');
+    check('BOM stripped from first header', bom[0][0] === 'id', JSON.stringify(bom[0][0]));
+  }
+
+  /* =====================================================
+     Database
+     ===================================================== */
+  group('loadDatabase');
+  await loadDatabase();
+
+  check('79 species loaded', DB.species.length === 79, `got ${DB.species.length}`);
+  check('every type key has a mode', TYPES.every(t => MODES[t] && MODES[t].type === t));
+  check('no rarity 5 in RARITY_WEIGHTS', !(5 in RARITY_WEIGHTS));
+
+  if (DB.warnings.length) {
+    note(`data warnings (${DB.warnings.length}):`);
+    DB.warnings.slice(0, 12).forEach(w => note('  ! ' + w));
+  } else {
+    note('no data warnings');
+  }
+
+  group('species per type');
+  for (const [t, n] of Object.entries({ Mystic: 17, Neutral: 16, Mechanic: 16, Wind: 15, Celestial: 15 })) {
+    const got = DB.species.filter(s => s.type === t).length;
+    check(`${t} has ${n} species`, got === n, `got ${got}`);
+  }
+
+  group('catchable split');
+  {
+    const catchable = DB.species.filter(s => s.isCatchable);
+    const bosses = DB.species.filter(s => s.isBoss);
+    const evoOnly = DB.species.filter(s => s.stage > 1);
+    check('37 creatures are evolution-only', evoOnly.length === 37, `got ${evoOnly.length}`);
+    check('5 bosses, one per mode', bosses.length === 5, `got ${bosses.length}: ${bosses.map(b => b.name).join(', ')}`);
+    // 42 stage-1 rows, less all five bosses: the three that are rarity 5 in
+    // the CSV and the two promoted by BOSS_OVERRIDES.
+    check('37 catchable in Encounter Mode', catchable.length === 37, `got ${catchable.length}`);
+    check('catchable + bosses = every stage 1', catchable.length + bosses.length === 42,
+          `${catchable.length} + ${bosses.length}`);
+    check('every stage-1 row carries a rarity',
+          DB.species.filter(s => s.stage === 1).every(s => s.rarity >= 1 && s.rarity <= 5));
+  }
+
+  group('bosses');
+  {
+    const expected = {
+      Mystic: 'Pheonyx', Wind: 'Pyrosora', Mechanic: 'Envoye',
+      Neutral: BOSS_OVERRIDES.Neutral, Celestial: BOSS_OVERRIDES.Celestial
+    };
+    for (const [t, name] of Object.entries(expected)) {
+      const b = bossOf(t);
+      check(`${t} boss is ${name}`, !!b && b.name === name, b ? b.name : 'none');
+      if (b) check(`  ${name} reports rarity 5`, b.effectiveRarity === 5, String(b.effectiveRarity));
+    }
+    check('Alpakina flagged as promoted', bossOf('Neutral')?.promotedBoss === true);
+    check('Pheonyx not flagged as promoted', bossOf('Mystic')?.promotedBoss === false);
+  }
+
+  group('encounter pools');
+  {
+    for (const t of TYPES) {
+      const pool = DB.pools.get(t);
+      const flat = Object.values(pool).flat();
+      const boss = bossOf(t);
+      check(`${t} pool excludes its boss`, !flat.some(s => s.id === boss?.id),
+            flat.filter(s => s.id === boss?.id).map(s => s.name).join(','));
+      check(`${t} pool is all stage 1`, flat.every(s => s.stage === 1));
+      note(`${t}: ` + [1, 2, 3, 4].map(r => `r${r}=${pool[r].length}`).join(' ') +
+           `  boss=${boss ? boss.name : 'none'}`);
+    }
+
+    const neutral = DB.pools.get('Neutral');
+    check('Neutral r4 keeps Dewmo only', neutral[4].length === 1 && neutral[4][0].name === 'Dewmo',
+          neutral[4].map(s => s.name).join(','));
+    check('Celestial r4 is now empty', DB.pools.get('Celestial')[4].length === 0,
+          DB.pools.get('Celestial')[4].map(s => s.name).join(','));
+  }
+
+  group('rollEncounter');
+  {
+    for (const t of TYPES) {
+      let bad = 0;
+      const seen = new Set();
+      for (let i = 0; i < 3000; i++) {
+        const sp = rollEncounter(t);
+        if (!sp) { bad++; continue; }
+        seen.add(sp.id);
+        if (sp.type !== t || sp.stage !== 1 || sp.effectiveRarity === 5) { bad = -1; break; }
+      }
+      check(`${t} rolls only valid catchables`, bad === 0, `bad=${bad}`);
+      const poolSize = Object.values(DB.pools.get(t)).flat().length;
+      check(`${t} reaches every creature in its pool`, seen.size === poolSize, `${seen.size}/${poolSize}`);
+    }
+
+    const minR = [];
+    for (let i = 0; i < 500; i++) { const s = rollEncounter('Mechanic', { minRarity: 3 }); if (s) minR.push(s.effectiveRarity); }
+    check('minRarity floor respected', minR.length > 0 && minR.every(r => r >= 3));
+  }
+
+  group('evolution graph');
+  {
+    const spiritfoil = speciesByName('Spiritfoil');
+    const path = lineagePath(spiritfoil.id).map(s => s.name);
+    check('Spiritfoil line is 3 long', path.length === 3, path.join(' > '));
+    check('Spiritfoil > Nebulicorn > Wraithhorn',
+          path.join('>') === 'Spiritfoil>Nebulicorn>Wraithhorn', path.join(' > '));
+
+    const wraith = speciesByName('Wraithhorn');
+    check('lineage from the tip walks back to the root',
+          lineagePath(wraith.id).map(s => s.name).join('>') === 'Spiritfoil>Nebulicorn>Wraithhorn');
+    check('Wraithhorn is a final form', (wraith.evolvesToIds || []).length === 0);
+    check('evolved forms inherit root rarity',
+          effectiveRarityOf(wraith) === effectiveRarityOf(spiritfoil),
+          `${effectiveRarityOf(wraith)} vs ${effectiveRarityOf(spiritfoil)}`);
+    check('family gathers all three', familyMembers(wraith.id).length === 3,
+          familyMembers(wraith.id).map(s => s.name).join(','));
+
+    const orphans = DB.species.filter(s => !DB.familyOf.has(s.id));
+    check('no species without a family', orphans.length === 0, orphans.map(s => s.name).join(','));
+
+    let unresolved = 0;
+    for (const s of DB.species) unresolved += s.evolvesToNames.length - s.evolvesToIds.length;
+    check('every "Evolves to" name resolved', unresolved === 0, `${unresolved} unresolved`);
+
+    check('every evolved form has a parent',
+          DB.species.filter(s => s.stage > 1).every(s => DB.evolvesFrom.has(s.id)));
+
+    // Evolution Mode needs at least one evolvable creature reachable in every
+    // mode, or the mode can never light EVOLVE.
+    for (const t of TYPES) {
+      const anyEvolvable = Object.values(DB.pools.get(t)).flat().some(s => s.evolvesToIds.length > 0);
+      check(`${t} has an evolvable catchable`, anyEvolvable);
+    }
+  }
+
+  group('sprite paths');
+  {
+    const east = speciesByName('Antheara East');
+    check('space in filename is encoded', east.imagePath === 'images/Antheara%20East.png', east.imagePath);
+    check('shiny mirrors the same filename', east.shinyPath === 'shiny/Antheara%20East.png', east.shinyPath);
+
+    // Fetch every sprite: a 404 here is a blank creature on the table, and
+    // checking all 158 is cheap next to debugging one missing file later.
+    let missing = [];
+    await Promise.all(DB.species.map(async sp => {
+      for (const p of [sp.imagePath, sp.shinyPath]) {
+        const r = await fetch(p, { method: 'HEAD' });
+        if (!r.ok) missing.push(`${p} (${r.status})`);
+      }
+    }));
+    check(`all ${DB.species.length * 2} sprites present`, missing.length === 0,
+          missing.slice(0, 6).join(', '));
+  }
+
+  /* =====================================================
+     Save layer
+     ===================================================== */
+  group('state / save');
+  {
+    const s = blankSave();
+    check('no economy keys in the save',
+          !('candy' in s) && !('xp' in s) && !('stardust' in s) && !('storage' in s));
+    check('a high score table per mode', TYPES.every(t => Array.isArray(s.highScores[t])));
+
+    await store.init();
+    await store.startFresh();
+
+    const meditot = speciesByName('Meditot');
+    let r = store.recordCapture(meditot.id, { shiny: false });
+    check('first capture is new', r.isNew === true);
+    r = store.recordCapture(meditot.id, { shiny: true });
+    check('second capture is not new', r.isNew === false);
+    check('shiny recorded', store.hasShiny(meditot.id) === true);
+    check('caught count is 2', store.timesCaught(meditot.id) === 2, String(store.timesCaught(meditot.id)));
+
+    const zen = speciesByName('Zenquaza');
+    const ev = store.recordEvolution(zen.id, { shiny: true });
+    check('evolution registers the new form', ev.isNew === true && store.isRegistered(zen.id));
+    check('evolved shiny enters the shiny dex', store.hasShiny(zen.id) === true);
+
+    check('registeredCount counts 2', store.registeredCount() === 2, String(store.registeredCount()));
+    check('registeredCount filters by type', store.registeredCount('Mystic') === 2);
+    check('registeredCount is 0 for another type', store.registeredCount('Wind') === 0);
+
+    const g1 = store.endGame({ type: 'Mystic', score: 250000, caught: 3, discTier: 2, balls: 3 });
+    check('first score ranks 1st', g1.rank === 1 && g1.isBest === true, JSON.stringify(g1));
+    const g2 = store.endGame({ type: 'Mystic', score: 100000, balls: 3 });
+    check('lower score ranks 2nd', g2.rank === 2 && g2.isBest === false, JSON.stringify(g2));
+    check('best score kept', store.bestFor('Mystic') === 250000, String(store.bestFor('Mystic')));
+    check('games counted', store.s.stats.games === 2, String(store.s.stats.games));
+    check('save reports progress', store.progress().empty === false);
+
+    // A save must survive a round trip through JSON, since that is what both
+    // IndexedDB and the backup file do to it.
+    const round = JSON.parse(JSON.stringify(store.s));
+    await store.adopt(round);
+    check('survives a JSON round trip', store.registeredCount() === 2 && store.bestFor('Mystic') === 250000);
+
+    await store.reset();
+    check('reset clears the dex', store.registeredCount() === 0 && store.s.stats.games === 0);
+  }
+
+  /* =====================================================
+     Physics
+     ===================================================== */
+  group('physics: gravity and integration');
+  {
+    const w = new World({ gravity: 100 });
+    const b = w.addBall(new Ball({ x: 50, y: 10 }));
+    for (let i = 0; i < 240; i++) w.step(PHYS_DT);        // one second
+    check('falls about 48 units in one second', near(b.pos.y - 10, 48, 3), `fell ${(b.pos.y - 10).toFixed(2)}`);
+    check('vertical speed near g*t', near(b.vel.y, 97, 5), b.vel.y.toFixed(2));
+    check('no sideways drift', near(b.vel.x, 0, 1e-9), String(b.vel.x));
+  }
+
+  group('physics: bounce off a wall');
+  {
+    const w = new World({ gravity: 0 });
+    w.add(segment(0, 100, 100, 100, { restitution: 0.5, friction: 0 }));
+    const b = w.addBall(new Ball({ x: 50, y: 80 }));
+    b.setVel(0, 100);
+    for (let i = 0; i < 240; i++) w.step(PHYS_DT);
+    check('ball is above the wall', b.pos.y < 100, b.pos.y.toFixed(2));
+    check('ball is travelling upward', b.vel.y < 0, b.vel.y.toFixed(2));
+    check('restitution roughly halved the speed', near(Math.abs(b.vel.y), 50, 6), Math.abs(b.vel.y).toFixed(2));
+  }
+
+  group('physics: no tunnelling at speed');
+  {
+    // The whole reason for sub-stepping. At 400 u/s a 60 Hz frame moves the
+    // ball 6.7 units, nearly three times its radius, straight through a
+    // 0.6-thick wall.
+    for (const speed of [150, 240, 300, MAX_SPEED]) {
+      const w = new World({ gravity: 0 });
+      w.add(
+        segment(0, 0, 100, 0), segment(0, 180, 100, 180),
+        segment(0, 0, 0, 180), segment(100, 0, 100, 180)
+      );
+      const b = w.addBall(new Ball({ x: 50, y: 90 }));
+      b.setVel(speed * 0.8, speed * 0.6);
+
+      let escaped = false;
+      for (let i = 0; i < 240 * 12; i++) {
+        w.step(PHYS_DT);
+        if (b.pos.x < -1 || b.pos.x > 101 || b.pos.y < -1 || b.pos.y > 181) { escaped = true; break; }
+      }
+      check(`stays inside the box at ${speed} u/s`, !escaped,
+            escaped ? `escaped to ${b.pos.x.toFixed(1)},${b.pos.y.toFixed(1)}` : '');
+    }
+  }
+
+  group('physics: arc contains the ball');
+  {
+    const w = new World({ gravity: 0 });
+    w.add(arc(50, 90, 40, 0, Math.PI * 2, { restitution: 0.8, friction: 0 }));
+    const b = w.addBall(new Ball({ x: 50, y: 90 }));
+    b.setVel(210, 130);
+    let escaped = false;
+    for (let i = 0; i < 240 * 8; i++) {
+      w.step(PHYS_DT);
+      if (vdist(b.pos, vec(50, 90)) > 41) { escaped = true; break; }
+    }
+    check('ball stays inside the ring', !escaped, `r=${vdist(b.pos, vec(50, 90)).toFixed(2)}`);
+  }
+
+  group('physics: bumper kick');
+  {
+    const w = new World({ gravity: 0 });
+    w.add(circle(50, 60, 4, { restitution: 0.3, kick: 60 }));
+    const b = w.addBall(new Ball({ x: 50, y: 80 }));
+    b.setVel(0, -40);
+    for (let i = 0; i < 120; i++) w.step(PHYS_DT);
+    check('bumper sent the ball back down', b.vel.y > 0, b.vel.y.toFixed(2));
+    check('bumper added energy', b.speed > 40, b.speed.toFixed(2));
+  }
+
+  group('physics: flipper throws the ball');
+  {
+    const w = new World({ gravity: 0 });
+    const f = w.addFlipper(new Flipper({
+      pivot: { x: 34, y: 158 }, length: 17, thick: 1.9,
+      restAngle: 0.42, range: -0.95, upSpeed: 34, side: 'left', restitution: 0.5
+    }));
+    const b = w.addBall(new Ball({ x: 44, y: 158 }));
+    b.setVel(0, 6);
+    for (let i = 0; i < 30; i++) w.step(PHYS_DT);
+    const before = b.speed;
+    f.up = true;
+    for (let i = 0; i < 60; i++) w.step(PHYS_DT);
+
+    check('flipper launched the ball upward', b.vel.y < -30, b.vel.y.toFixed(2));
+    check('flipper added energy', b.speed > before + 30, `${before.toFixed(1)} -> ${b.speed.toFixed(1)}`);
+    check('flipper reached its stop', near(f.angle, f.endAngle, 1e-6));
+    check('travel reads 1 when raised', near(f.travel, 1, 1e-6), f.travel.toFixed(3));
+    note(`launch speed ${b.speed.toFixed(1)} u/s`);
+  }
+
+  group('physics: tip beats base');
+  {
+    // A real flipper throws harder near the tip, because omega x r grows with r.
+    //
+    // The ball has to be placed from the bat's own geometry, not guessed: an
+    // earlier version of this test put it at (pivot.x + along, pivot.y + along
+    // * 0.45), which is nowhere near a bat sitting at 0.42 rad. The flipper
+    // swung straight past it and both "launches" were 0.0, which looked like
+    // an engine failure and was not one.
+    const launch = along => {
+      const w = new World({ gravity: 0 });
+      const f = w.addFlipper(new Flipper({
+        pivot: { x: 34, y: 158 }, length: 17, thick: 1.9,
+        restAngle: 0.42, range: -0.95, side: 'left'
+      }));
+      const b = w.addBall(new Ball({}));
+
+      // Along the bat, then off its upper face by exactly the contact distance.
+      const dx = Math.cos(f.restAngle), dy = Math.sin(f.restAngle);
+      const gap = b.r + f.thick;
+      b.moveTo(
+        f.pivot.x + dx * along + dy * gap,
+        f.pivot.y + dy * along - dx * gap
+      );
+
+      f.up = true;
+      for (let i = 0; i < 90; i++) w.step(PHYS_DT);
+      return b.speed;
+    };
+
+    const atBase = launch(6), atTip = launch(16);
+    check('the base launches the ball at all', atBase > 5, atBase.toFixed(1));
+    check('tip launches harder than the base', atTip > atBase,
+          `base ${atBase.toFixed(1)} vs tip ${atTip.toFixed(1)}`);
+
+    // A designed range, not just "did not explode". Reaching the top of the
+    // table from the flippers needs about 180 u/s, so the tip shot must clear
+    // that; and it must stay well under the clamp, or every shot becomes the
+    // same maximum shot and aiming stops mattering.
+    check('a full tip shot reaches the top of the table', atTip > 200, atTip.toFixed(1));
+    check('a full tip shot is not a rocket', atTip < 285, atTip.toFixed(1));
+    check('the clamp is never the thing limiting a shot', atTip < MAX_SPEED * 0.88,
+          `${atTip.toFixed(1)} vs clamp ${MAX_SPEED}`);
+
+    // The spread is the point: where the ball sits on the bat is a skill.
+    //
+    // It is smaller than the naive omega x r ratio (16/6, so nearly 3x) because
+    // the bat's tangential friction is low and the ball slides outward along it
+    // during the swing, so a base contact is partly thrown from further out by
+    // the time it leaves. That is correct behaviour and worth keeping â€” a real
+    // flipper sweeps a ball up the bat the same way â€” so the check is that a
+    // useful spread exists, not that it matches the arithmetic.
+    check('base and tip shots differ usefully', atTip > atBase * 1.3,
+          `${atBase.toFixed(1)} -> ${atTip.toFixed(1)}, ratio ${(atTip / atBase).toFixed(2)}`);
+    note(`launch at base ${atBase.toFixed(1)} u/s, at tip ${atTip.toFixed(1)} u/s`);
+  }
+
+  group('physics: rotor');
+  {
+    // A rotor shares Flipper's surface, so it must resolve through the same
+    // path and impart its angular velocity the same way.
+    const w = new World({ gravity: 0 });
+    const r = w.addRotor(new Rotor({ pivot: { x: 50, y: 90 }, length: 10, thick: 1.6, omega: 9 }));
+    check('a rotor lands in bats and rotors, not flippers',
+          w.bats.length === 1 && w.rotors.length === 1 && w.flippers.length === 0);
+
+    const before = r.angle;
+    for (let i = 0; i < 24; i++) w.step(PHYS_DT);      // 0.1 s
+    check('a rotor keeps turning', Math.abs(r.angle - before) > 0.5, (r.angle - before).toFixed(3));
+
+    // Sitting still just off the hub, the arm must come round and throw it.
+    const b = w.addBall(new Ball({ x: 50, y: 82 }));
+    let moved = false;
+    for (let i = 0; i < 240 && !moved; i++) { w.step(PHYS_DT); if (b.speed > 20) moved = true; }
+    check('a rotor throws a resting ball', moved, `speed ${b.speed.toFixed(1)}`);
+    check('a rotor cannot exceed the clamp', b.speed <= MAX_SPEED + 1e-6, b.speed.toFixed(1));
+
+    // Both arms are live, so a ball on the far side is struck too.
+    const w2 = new World({ gravity: 0 });
+    w2.addRotor(new Rotor({ pivot: { x: 50, y: 90 }, length: 10, thick: 1.6, omega: 9, angle: 0 }));
+    const far = w2.addBall(new Ball({ x: 50, y: 98 }));   // opposite side from the first test
+    let hit = false;
+    for (let i = 0; i < 240 && !hit; i++) { w2.step(PHYS_DT); if (far.speed > 20) hit = true; }
+    check('a rotor is double-ended', hit, `speed ${far.speed.toFixed(1)}`);
+
+    // Flippers must still report as flippers now that both share a path.
+    const w3 = new World({ gravity: 0 });
+    const f = w3.addFlipper(new Flipper({
+      pivot: { x: 34, y: 158 }, restAngle: 0.42, range: -0.95, side: 'left'
+    }));
+    const fb = w3.addBall(new Ball({}));
+    const dx = Math.cos(f.restAngle), dy = Math.sin(f.restAngle);
+    const gap = fb.r + f.thick;
+    fb.moveTo(f.pivot.x + dx * 14 + dy * gap, f.pivot.y + dy * 14 - dx * gap);
+    f.up = true;
+    for (let i = 0; i < 60; i++) w3.step(PHYS_DT);
+    const kinds = new Set(w3.drainEvents().map(e => e.type));
+    check('flipper contacts still report as "flipper"', kinds.has('flipper'), [...kinds].join(','));
+  }
+
+  group('physics: sensors, gates and fields');
+  {
+    const w = new World({ gravity: 0 });
+    let hits = 0;
+    w.add(sensorCircle(50, 60, 5, { onHit: () => hits++, cooldownFor: 0.05 }));
+    const b = w.addBall(new Ball({ x: 50, y: 100 }));
+    b.setVel(0, -80);
+    for (let i = 0; i < 240; i++) w.step(PHYS_DT);
+    check('sensor fired', hits >= 1, `${hits} hits`);
+    check('sensor did not deflect the ball', b.vel.y < 0 && near(b.vel.x, 0, 1e-6),
+          `v=${b.vel.x.toFixed(2)},${b.vel.y.toFixed(2)}`);
+
+    const wUp = new World({ gravity: 0 });
+    wUp.add(segment(30, 60, 70, 60, { oneWay: { x: 0, y: -1 } }));
+    const up = wUp.addBall(new Ball({ x: 50, y: 70 }));
+    up.setVel(0, -60);
+    for (let i = 0; i < 120; i++) wUp.step(PHYS_DT);
+    check('gate passes a ball travelling up', up.pos.y < 58, up.pos.y.toFixed(2));
+
+    const wDown = new World({ gravity: 0 });
+    wDown.add(segment(30, 60, 70, 60, { oneWay: { x: 0, y: -1 }, restitution: 0.5 }));
+    const down = wDown.addBall(new Ball({ x: 50, y: 50 }));
+    down.setVel(0, 60);
+    for (let i = 0; i < 120; i++) wDown.step(PHYS_DT);
+    check('gate blocks it coming back down', down.pos.y < 60, down.pos.y.toFixed(2));
+
+    const wLift = new World({ gravity: 100 });
+    wLift.add(field(0, 0, 100, 180, 0, -260));
+    const lift = wLift.addBall(new Ball({ x: 50, y: 90 }));
+    for (let i = 0; i < 120; i++) wLift.step(PHYS_DT);
+    check('field lifts the ball against gravity', lift.pos.y < 90, lift.pos.y.toFixed(2));
+  }
+
+  group('physics: cooldown stops score spam');
+  {
+    const w = new World({ gravity: 100 });
+    let hits = 0;
+    w.add(segment(30, 120, 70, 120, { restitution: 0.05, onHit: () => hits++, cooldownFor: 0.1 }));
+    w.addBall(new Ball({ x: 50, y: 100 }));
+    for (let i = 0; i < 240 * 3; i++) w.step(PHYS_DT);   // three seconds
+    check('a resting ball does not machine-gun a target', hits <= 32, `${hits} hits in 3s`);
+    check('the target did fire at least once', hits >= 1, `${hits}`);
+  }
+
+  group('physics: nudge and tilt');
+  {
+    const w = new World({ gravity: 0 });
+    const b = w.addBall(new Ball({ x: 50, y: 90 }));
+    check('nudge allowed under the limit', w.applyNudge(-40, 0) === true);
+    for (let i = 0; i < 30; i++) w.step(PHYS_DT);
+    check('nudge moved the ball left', b.pos.x < 50, b.pos.x.toFixed(2));
+
+    const w2 = new World({ gravity: 0 });
+    w2.addBall(new Ball({ x: 50, y: 90 }));
+    let allowed = 0;
+    for (let i = 0; i < 10; i++) if (w2.applyNudge(-30, 0)) allowed++;
+    check('leaning on nudge tilts the table', w2.tilted === true, `allowed ${allowed}`);
+    check('nudge refused once tilted', w2.applyNudge(-30, 0) === false);
+    w2.resetTilt();
+    check('resetTilt clears it', w2.tilted === false && w2.tilt === 0);
+  }
+
+  group('physics: advance() is frame-rate independent');
+  {
+    // One simulated second, delivered as N frames of 1/N. Frame counts are
+    // exact integers on purpose: accumulating `t += frameDt` until `t >= 1`
+    // overshoots at 30 Hz because 30 * (1/30) lands a hair under 1 in floating
+    // point, giving a 31st frame. That made the engine look frame-rate
+    // dependent when the extra fall was entirely the test's own doing.
+    const fall = hz => {
+      const w = new World({ gravity: 100 });
+      const b = w.addBall(new Ball({ x: 50, y: 10 }));
+      for (let i = 0; i < hz; i++) w.advance(1 / hz);
+      return { y: b.pos.y, steps: w.steps };
+    };
+
+    const a30 = fall(30), a60 = fall(60), a120 = fall(120);
+    note(`steps taken: 30Hz=${a30.steps}  60Hz=${a60.steps}  120Hz=${a120.steps}`);
+
+    // One second at 240 Hz is 240 steps however it is sliced, give or take a
+    // single step of floating-point drift in the accumulator.
+    for (const [label, r] of [['30Hz', a30], ['60Hz', a60], ['120Hz', a120]]) {
+      check(`${label} takes ~240 steps for one second`, Math.abs(r.steps - 240) <= 1, String(r.steps));
+    }
+
+    // A one-step discrepancy at ~97 u/s is 0.4 units, so anything inside half
+    // a unit means the frame rate genuinely did not matter.
+    check('30 Hz and 60 Hz agree', near(a30.y, a60.y, 0.5), `${a30.y.toFixed(3)} vs ${a60.y.toFixed(3)}`);
+    check('60 Hz and 120 Hz agree', near(a60.y, a120.y, 0.5), `${a60.y.toFixed(3)} vs ${a120.y.toFixed(3)}`);
+
+    // A long stall must not fast-forward the ball into the drain.
+    const wStall = new World({ gravity: 100 });
+    const stalled = wStall.addBall(new Ball({ x: 50, y: 10 }));
+    wStall.advance(5);                       // five seconds in one frame
+    check('a long stall is capped, not replayed', wStall.steps <= 12, String(wStall.steps));
+    check('the ball barely moved during the stall', stalled.pos.y - 10 < 1, (stalled.pos.y - 10).toFixed(3));
+  }
+
+  group('physics: events drain once');
+  {
+    const w = new World({ gravity: 0 });
+    w.add(circle(50, 60, 4, { kick: 20 }));
+    const b = w.addBall(new Ball({ x: 50, y: 80 }));
+    b.setVel(0, -60);
+    for (let i = 0; i < 120; i++) w.step(PHYS_DT);
+    check('events were produced', w.events.length > 0, `${w.events.length}`);
+    const first = w.drainEvents();
+    check('drain returned them', first.length > 0);
+    check('draining twice yields nothing', w.drainEvents().length === 0);
+  }
+
+  /* =====================================================
+     Table geometry
+     ===================================================== */
+  group('table: builds for every mode');
+  {
+    for (const t of TYPES) {
+      const { world, parts, mode } = buildTable(t);
+      check(`${t} builds`, !!world && !!parts.flippers && !!parts.saucer);
+      check(`  ${t} uses the ${MODES[t].gimmick} gimmick`, parts.gimmick.id === MODES[t].gimmick,
+            parts.gimmick.id);
+      check(`  ${t} has 5 bank targets`, parts.bank.length === 5);
+      check(`  ${t} has 3 bumpers and 3 top lanes`,
+            parts.bumpers.length === 3 && parts.topLanes.length === 3);
+      check(`  ${t} has 2 ramps, 2 slingshots, 2 outlanes`,
+            parts.ramps.length === 2 && parts.slingshots.length === 2 && parts.outlanes.length === 2);
+      check(`  ${t} gimmick update/reset do not throw`, (() => {
+        try { parts.gimmick.update(0.016); parts.gimmick.reset(); return true; }
+        catch { return false; }
+      })());
+      note(`${t}: ${mode.name} â€” ${world.colliders.length} colliders, ` +
+           `${world.bats.length} bats, ${world.fields.length} fields`);
+    }
+  }
+
+  group('table: the drain gap');
+  {
+    const { parts } = buildTable('Neutral');
+    const lt = parts.flippers.left.tip, rt = parts.flippers.right.tip;
+    const ball = new Ball({});
+    const dia = ball.r * 2;
+
+    /**
+     * The number that matters is the CLEAR opening, not the distance between
+     * tip centres. A flipper is a capsule, so each tip eats `thick` of the
+     * gap. An earlier version of this check compared centre distance against
+     * the ball diameter, passed happily at 6.0 vs 4.7, and never noticed that
+     * the real opening was 6.0 - 3.8 = 2.2 and the drain was sealed shut.
+     */
+    const centres = rt.x - lt.x;
+    const clear = centres - 2 * LAYOUT.flippers.thick;
+
+    check('the flipper tips leave a gap', centres > 0, centres.toFixed(2));
+    check('the clear opening passes a ball', clear > dia,
+          `clear ${clear.toFixed(2)} vs ball ${dia.toFixed(2)}`);
+    check('the opening is about a ball and a bit', clear > dia * 1.15 && clear < dia * 1.7,
+          `${(clear / dia).toFixed(2)} ball widths`);
+    check('the gap is centred on the play area',
+          Math.abs((lt.x + rt.x) / 2 - LAYOUT.centre) < 0.6,
+          `${((lt.x + rt.x) / 2).toFixed(2)} vs ${LAYOUT.centre}`);
+
+    // A raised flipper must not reach into its slingshot.
+    for (const [side, sling] of [['left', LAYOUT.slingshots[0]], ['right', LAYOUT.slingshots[1]]]) {
+      const f = parts.flippers[side];
+      f.up = true;
+      f.angle = f.endAngle;
+      const tip = f.tip;
+      const d = Math.hypot(tip.x - sling.b.x, tip.y - sling.b.y);
+      check(`${side} flipper clears its slingshot when raised`, d > ball.r + 1.2 + LAYOUT.flippers.thick,
+            d.toFixed(2));
+      f.up = false;
+      f.angle = f.restAngle;
+    }
+
+    // The dividers have to stop closer to each pivot than a ball is wide, or
+    // the ball slips behind the flipper straight into the drain.
+    for (const [side, d, pivot] of [
+      ['left', LAYOUT.lower.leftDivider, LAYOUT.flippers.left.pivot],
+      ['right', LAYOUT.lower.rightDivider, LAYOUT.flippers.right.pivot]
+    ]) {
+      const dist = Math.hypot(d.b.x - pivot.x, d.b.y - pivot.y);
+      check(`${side} divider closes the gap to its pivot`, dist < ball.r * 2,
+            `${dist.toFixed(2)} vs ${(ball.r * 2).toFixed(2)}`);
+    }
+  }
+
+  group('table: the plunge leaves the shooter lane');
+  {
+    const { world, parts } = buildTable('Mystic');
+    const b = world.addBall(newBall());
+    check('a new ball starts held in the lane', b.held === true && b.pos.x > LAYOUT.shooter.x0);
+
+    b.held = false;
+    b.setVel(0, -launchImpulse(1));
+    let reachedPlay = false, escaped = false;
+    for (let i = 0; i < 240 * 6; i++) {
+      world.step(PHYS_DT);
+      if (b.pos.x < LAYOUT.shooter.x0 - 2) reachedPlay = true;
+      if (b.pos.x < -1 || b.pos.x > TABLE_W + 1 || b.pos.y < -1) { escaped = true; break; }
+    }
+    check('a full plunge reaches the playfield', reachedPlay,
+          `ended at ${b.pos.x.toFixed(1)},${b.pos.y.toFixed(1)}`);
+    check('the ball never leaves the table', !escaped);
+
+    // Even the softest plunge must get out of the lane, or the control reads
+    // as broken rather than gentle.
+    const soft = buildTable('Mystic');
+    const sb = soft.world.addBall(newBall());
+    sb.held = false;
+    sb.setVel(0, -launchImpulse(0));
+    let cleared = false;
+    for (let i = 0; i < 240 * 8; i++) {
+      soft.world.step(PHYS_DT);
+      if (sb.pos.x < LAYOUT.shooter.x0 - 2) { cleared = true; break; }
+    }
+    check('the softest plunge still reaches the playfield', cleared,
+          `ended at ${sb.pos.x.toFixed(1)},${sb.pos.y.toFixed(1)}`);
+    check('launchImpulse is monotonic',
+          [0, 0.25, 0.5, 0.75, 1].every((p, i, a) => i === 0 || launchImpulse(p) > launchImpulse(a[i - 1])));
+
+    // The gate is vertical and lets the ball out to the left only.
+    check('the gate is vertical', parts.laneGate.a.x === parts.laneGate.b.x);
+    check('the gate opens leftwards', parts.laneGate.oneWay?.x === -1);
+
+    // And it must actually turn back a ball rolling in off the dome.
+    const back = buildTable('Mystic');
+    const bb = back.world.addBall(new Ball({ x: LAYOUT.shooter.x0 - 6, y: 30 }));
+    bb.setVel(90, 10);                                  // heading right, into the lane
+    for (let i = 0; i < 240 * 4; i++) back.world.step(PHYS_DT);
+    check('a ball cannot get back into the shooter lane', bb.pos.x < LAYOUT.shooter.x0,
+          `x ${bb.pos.x.toFixed(1)}`);
+  }
+
+  group('table: nothing gets stuck');
+  {
+    /**
+     * The geometry test that matters. A ball that comes to rest somewhere
+     * with the flippers idle is a dead game, and it is very easy to build a
+     * pocket that does it â€” on top of a lane divider, behind a slingshot, in
+     * the mouth of a gimmick. So: drop a spread of balls across every mode,
+     * let them fall with the flippers down, and require every one to drain.
+     */
+    // Inside the dome only. Above y = dome.cy the playfield is bounded by the
+    // arc, not by the side walls, so a grid corner like (7,14) sits outside
+    // the table entirely â€” far enough from the arc that an overlap test calls
+    // it clear, and it then "escapes" through a wall that was never there.
+    const D = LAYOUT.dome;
+    const insideTable = (x, y) =>
+      y >= D.cy ? (x > LAYOUT.left + 4 && x < LAYOUT.right - 4)
+                : Math.hypot(x - D.cx, y - D.cy) < D.r - 4;
+
+    const spots = [];
+    for (let x = 7; x <= 78; x += 6) {
+      for (let y = 14; y <= 152; y += 12) {
+        if (insideTable(x, y)) spots.push({ x, y });
+      }
+    }
+    check('the drop grid has a decent spread', spots.length > 60, `${spots.length} points`);
+
+    /**
+     * Only drop from somewhere the ball could actually be. A spawn point
+     * inside a wall gets shoved out by position correction and can be flung
+     * off the table, which reads as an escape bug that is not one.
+     *
+     * Rather than reimplement the overlap maths, ask the world: with no
+     * gravity and no velocity, the only thing that can move the ball is a
+     * position correction, so any movement at all means it was overlapping.
+     */
+    // One probe world per mode rather than one per point: building a table is
+    // the expensive part, and this check only cares about static geometry.
+    // Rotors are parked, since whether an arm happens to be in the way is
+    // transient and their hubs are static colliders anyway.
+    const probeWorld = type => {
+      const { world } = buildTable(type);
+      world.gravity = 0;
+      world.rotors.forEach(r => { r.active = false; });
+      return world;
+    };
+
+    const isClear = (world, spot) => {
+      const probe = world.addBall(new Ball({ x: spot.x, y: spot.y }));
+      world.step(PHYS_DT);
+      const moved = Math.hypot(probe.pos.x - spot.x, probe.pos.y - spot.y);
+      world.removeBall(probe);
+      return moved < 1e-6;
+    };
+
+    let totalStuck = 0, totalEscaped = 0, totalTested = 0, totalSkipped = 0;
+
+    for (const t of TYPES) {
+      const stuck = [];
+      const escapes = [];
+      const probe = probeWorld(t);
+
+      for (const spot of spots) {
+        if (!isClear(probe, spot)) { totalSkipped++; continue; }
+
+        const { world, parts } = buildTable(t);
+        const b = world.addBall(new Ball({ x: spot.x, y: spot.y }));
+        // A little sideways drift, so a ball balanced on a rounded cap is not
+        // rescued by perfect symmetry.
+        b.setVel(((spot.x * 7) % 5 - 2) * 8, 4);
+
+        let drained = false, left = false;
+        for (let i = 0; i < 240 * 20; i++) {          // 20 simulated seconds
+          world.step(PHYS_DT);
+          // Drive the gimmick, exactly as game.js does. Without this the Gale
+          // Spire's updraught never switches off, and a ball can hover
+          // indefinitely balanced on the edge of the lift â€” a trap that cannot
+          // happen in the real game, where the gust comes and goes.
+          parts.gimmick.update(PHYS_DT);
+          if (b.pos.y > LAYOUT.drainY) { drained = true; break; }
+          if (b.pos.x < -2 || b.pos.x > TABLE_W + 2 || b.pos.y < -2) { left = true; break; }
+        }
+
+        /**
+         * A ball at rest on an idle flipper is not stuck â€” cradling the ball
+         * on the bat is a real pinball technique, and raising the flipper's
+         * friction to rubber levels is what makes it possible. What matters is
+         * that the player can always get it moving again, so anything still on
+         * the table gets the flippers worked for a few seconds. Only a ball
+         * that ignores that is genuinely lost.
+         */
+        let recovered = false;
+        if (!drained && !left) {
+          const before = { x: b.pos.x, y: b.pos.y };
+          for (let i = 0; i < 240 * 8 && !recovered; i++) {
+            if (i % 60 === 0) {
+              const on = (i / 60) % 2 === 0;
+              parts.flippers.left.up = on;
+              parts.flippers.right.up = on;
+            }
+            world.step(PHYS_DT);
+            parts.gimmick.update(PHYS_DT);
+            if (b.pos.y > LAYOUT.drainY) { recovered = true; drained = true; }
+            else if (Math.hypot(b.pos.x - before.x, b.pos.y - before.y) > 10) recovered = true;
+          }
+        }
+
+        totalTested++;
+        if (left) escapes.push(`(${spot.x},${spot.y})->(${b.pos.x.toFixed(0)},${b.pos.y.toFixed(0)})`);
+        else if (!drained && !recovered) {
+          stuck.push(`(${spot.x},${spot.y})->(${b.pos.x.toFixed(0)},${b.pos.y.toFixed(0)})`);
+        }
+      }
+
+      totalStuck += stuck.length;
+      totalEscaped += escapes.length;
+      check(`${t}: every ball drains`, stuck.length === 0, stuck.slice(0, 6).join(' '));
+      check(`${t}: no ball escapes the table`, escapes.length === 0, escapes.slice(0, 4).join(' '));
+    }
+
+    note(`${totalTested} drops across ${TYPES.length} modes ` +
+         `(${totalSkipped} spawn points skipped as blocked): ` +
+         `${totalStuck} stuck, ${totalEscaped} escaped`);
+  }
+
+  group('table: flippers can actually save the ball');
+  {
+    const { world, parts } = buildTable('Neutral');
+    const f = parts.flippers.left;
+
+    /**
+     * The ball is placed on the bat from the bat's own geometry rather than
+     * dropped from above and left to settle. Dropping works, but the ball then
+     * rolls down the bat, off the tip and through the drain in well under a
+     * second â€” so any fixed wait long enough to "settle" is also long enough
+     * to lose it, and the flip then appears to do nothing.
+     */
+    const b = world.addBall(new Ball({}));
+    /**
+     * 80% of the way out, which is where a cradled ball actually sits: the bat
+     * slopes down towards its tip, so a ball that lands on it settles near the
+     * end.
+     *
+     * It matters more than it looks. Launch speed is omega x r x (1 + e), so at
+     * the tip the ball leaves at about 232 u/s against a tip travelling at 238
+     * â€” it outruns the bat and is gone. Placed halfway along it only leaves at
+     * 137, the tip catches it again late in the swing when the bat has rotated
+     * past horizontal, and that second hit fires it sideways at 237 u/s instead
+     * of up the table. Authentic, and exactly why you do not want the ball on
+     * the base of the bat, but not what "can a flipper save the ball" means.
+     */
+    const along = f.length * 0.8;
+    const dx = Math.cos(f.restAngle), dy = Math.sin(f.restAngle);
+    const gap = b.r + f.thick;
+
+    // Dropped a little clear of the face and allowed to settle, rather than
+    // placed exactly tangent. Exact tangency means depth 0, the solver's
+    // `d >= rad` test skips the contact, and the first real contact is a
+    // glancing one part way through the swing â€” so the ball gets carried up
+    // by the bat instead of thrown by it, which reads as the flipper failing.
+    b.moveTo(f.pivot.x + dx * along + dy * (gap + 3), f.pivot.y + dy * along - dx * (gap + 3));
+    for (let i = 0; i < 40; i++) world.step(PHYS_DT);
+
+    check('the ball settles on the bat, above the drain',
+          b.pos.y < LAYOUT.drainY && b.pos.y > 140 && b.speed < 20,
+          `y ${b.pos.y.toFixed(1)} speed ${b.speed.toFixed(1)}`);
+
+    const yBefore = b.pos.y;
+    note(`save: ball rests at (${b.pos.x.toFixed(1)}, ${b.pos.y.toFixed(1)})`);
+
+    f.up = true;
+
+    // Track the best of the whole flight, and where the ball was when it was
+    // moving fastest. Sampling one instant catches it wherever it happens to
+    // be, which may be on its way back down; and knowing where the peak
+    // happened is what identifies whatever it went on to hit.
+    let peakSpeed = 0, peakAt = null, highest = yBefore, highestAt = null;
+    const trace = [];
+    for (let i = 0; i < 240 * 2; i++) {
+      // Released after 120 ms, the way a player taps it. Holding the bat up for
+      // the whole flight leaves a pocket between the raised bat and the inlane
+      // divider that the ball can drop into and sit in.
+      if (i === 29) f.up = false;
+      world.step(PHYS_DT);
+      if (b.speed > peakSpeed) { peakSpeed = b.speed; peakAt = { x: b.pos.x, y: b.pos.y }; }
+      if (b.pos.y < highest) { highest = b.pos.y; highestAt = { x: b.pos.x, y: b.pos.y }; }
+      if (i % 12 === 0 && trace.length < 10) trace.push(`${b.pos.x.toFixed(0)},${b.pos.y.toFixed(0)}`);
+      if (b.pos.y > LAYOUT.drainY) break;
+    }
+
+    note(`save: peak ${peakSpeed.toFixed(0)} u/s at ` +
+         `(${peakAt ? peakAt.x.toFixed(1) + ',' + peakAt.y.toFixed(1) : '-'}), ` +
+         `highest y ${highest.toFixed(1)} at x ${highestAt ? highestAt.x.toFixed(1) : '-'}`);
+    note(`save: path ${trace.join(' -> ')}`);
+
+    check('the flip launches it with real speed', peakSpeed > 130, peakSpeed.toFixed(1));
+    check('the save clears the lower third', highest < yBefore - 60,
+          `${yBefore.toFixed(1)} -> ${highest.toFixed(1)}`);
+    check('the save reaches the upper playfield', highest < 100, highest.toFixed(1));
+  }
+
+  group('table: bank targets drop and reset');
+  {
+    const { world, parts } = buildTable('Wind');
+    check('every target starts standing', parts.bank.every(t => t.active));
+    check('the bank spells CATCH', parts.bank.map(t => t.meta.letter).join('') === 'CATCH',
+          parts.bank.map(t => t.meta.letter).join(''));
+
+    // An inactive target must be genuinely absent, not merely unscored.
+    parts.bank.forEach(t => { t.active = false; });
+    const b = world.addBall(new Ball({ x: LAYOUT.bank.xs[2], y: LAYOUT.bank.y - 12 }));
+    b.setVel(0, 60);
+    for (let i = 0; i < 240; i++) world.step(PHYS_DT);
+    check('a dropped target no longer blocks the ball', b.pos.y > LAYOUT.bank.y + 4,
+          `y ${b.pos.y.toFixed(1)}`);
+  }
+
+  group('table: the Well is a sensor, not a wall');
+  {
+    const { world, parts } = buildTable('Celestial');
+    check('the saucer is a sensor', parts.saucer.sensor === true);
+
+    let entered = 0;
+    parts.saucer.onHit = () => entered++;
+    const b = world.addBall(new Ball({ x: LAYOUT.saucer.x, y: LAYOUT.saucer.y - 14 }));
+    b.setVel(0, 50);
+    for (let i = 0; i < 120; i++) world.step(PHYS_DT);
+    check('the ball reaches the Well', entered >= 1, `${entered}`);
+    check('and passes through rather than bouncing off', b.pos.y > LAYOUT.saucer.y,
+          `y ${b.pos.y.toFixed(1)}`);
+  }
+
+  group('table: gimmick behaviour');
+  {
+    // Bloom vines must regrow, or clearing them once ends the mode forever.
+    const bloom = buildTable('Celestial').parts.gimmick;
+    check('vines start grown', bloom.vines.every(v => v.active));
+    check('cutting a vine works', bloom.cut(0) === true && bloom.vines[0].active === false);
+    check('cutting an already cut vine is refused', bloom.cut(0) === false);
+    for (let i = 0; i < 60; i++) bloom.update(0.05);          // 3 s
+    check('a cut vine is still down after 3s', bloom.vines[0].active === false);
+    for (let i = 0; i < 100; i++) bloom.update(0.05);         // 8 s total
+    check('a cut vine regrows', bloom.vines[0].active === true);
+
+    // The updraught has to switch off, or the table becomes a holding pattern.
+    const up = buildTable('Wind').parts.gimmick;
+    const seen = new Set();
+    for (let i = 0; i < 400; i++) { up.update(0.02); seen.add(up.state.on); }
+    check('the updraught gusts on and off', seen.has(true) && seen.has(false));
+    check('the field follows the gust', up.fields[0].active === up.state.on);
+
+    // Gears must wind up with heat and settle back down.
+    const gears = buildTable('Mechanic').parts.gimmick;
+    const idle = Math.abs(gears.rotors[0].omega);
+    gears.state.heat = 4;
+    gears.update(0.016);
+    check('heat speeds the gears up', Math.abs(gears.rotors[0].omega) > idle,
+          `${idle} -> ${Math.abs(gears.rotors[0].omega).toFixed(2)}`);
+    check('the gears turn against each other',
+          Math.sign(gears.rotors[0].omega) !== Math.sign(gears.rotors[1].omega));
+    for (let i = 0; i < 800; i++) gears.update(0.02);
+    check('heat bleeds off', gears.state.heat === 0, String(gears.state.heat));
+
+    // The rune disc must accelerate as the mode heats.
+    const orbit = buildTable('Mystic').parts.gimmick;
+    const slow = orbit.rotors[0].omega;
+    orbit.state.spins = 12;
+    orbit.update(0.016);
+    check('the rune disc speeds up with spins', orbit.rotors[0].omega > slow,
+          `${slow} -> ${orbit.rotors[0].omega.toFixed(2)}`);
+    orbit.reset();
+    check('reset returns the disc to its base speed', orbit.rotors[0].omega === slow);
+  }
+
+  /* =====================================================
+     Game rules
+     ===================================================== */
+  group('game: starting a game');
+  {
+    await store.startFresh();
+
+    const log = [];
+    const g = new Game({ onEvent: (t, p) => log.push({ t, p }) });
+    g.start('Mystic');
+
+    check('the phase is PLUNGE', g.phase === PHASE.PLUNGE, g.phase);
+    check('three balls', g.run.ballsLeft === 3 && g.run.ballNumber === 1);
+    check('score starts at zero', g.run.score === 0);
+    check('the disc starts as a plain Capture Disc', g.run.discTier === 0);
+    check('the ball is held in the lane', g.ball.held === true && g.ball.pos.x > LAYOUT.shooter.x0);
+    check('the table matches the mode', g.mode.type === 'Mystic', g.mode.type);
+    check('gameStart and ballReady both fired',
+          log.some(e => e.t === 'gameStart') && log.some(e => e.t === 'ballReady'));
+    check('the mode is remembered', store.s.ui.lastMode === 'Mystic');
+    check('hud() reports a live run', g.hud()?.ballsLeft === 3);
+    check('view() is safe before launch', typeof g.view().plunger === 'number');
+  }
+
+  group('game: the plunge');
+  {
+    const g = new Game({});
+    g.start('Neutral');
+
+    g.plungeStart();
+    // Wind the plunger by running frames, the way the real loop does.
+    let now = 1000;
+    for (let i = 0; i < 40; i++) { now += 16; g.update(now); }
+    check('holding winds the plunger up', g._plunge.pull > 0.5, g._plunge.pull.toFixed(2));
+    check('view reports the pull', g.view().plunger > 0.5);
+
+    g.plungeRelease();
+    check('release moves to PLAY', g.phase === PHASE.PLAY, g.phase);
+    check('the ball is let go', g.ball.held === false);
+    check('and it is heading up', g.ball.vel.y < -150, g.ball.vel.y.toFixed(1));
+    check('the plunger indicator clears', g.view().plunger === 0);
+  }
+
+  group('game: scoring, multiplier and the disc');
+  {
+    const g = new Game({});
+    g.start('Neutral');
+
+    // _award is the single scoring path, so testing it covers every target.
+    const first = g._award(1000);
+    check('an award adds to the score', g.run.score === 1000 && first === 1000, String(g.run.score));
+
+    g.run.multiplier = 3;
+    check('the multiplier applies', g._award(1000) === 3000);
+    check('mult:false bypasses it', g._award(1000, { mult: false }) === 1000);
+
+    g.run.discTier = 3;                        // Master Disc, score x3
+    check('the disc multiplies too', g._award(1000, { mult: false }) === 3000);
+    check('disc and multiplier compound', g._award(1000) === 9000);
+
+    g.run.multiplier = 1;
+    g._bumpMultiplier(0.5);
+    check('a part-step does not announce a new multiplier', Math.floor(g.run.multiplier) === 1);
+    g._bumpMultiplier(0.5);
+    check('crossing a whole number does', Math.floor(g.run.multiplier) === 2);
+    for (let i = 0; i < 100; i++) g._bumpMultiplier(1);
+    check('the multiplier is capped', g.run.multiplier === MAX_MULTIPLIER, String(g.run.multiplier));
+  }
+
+  group('game: the CATCH bank arms an encounter');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+
+    check('nothing is armed to begin with', g._armedMode() === null);
+
+    // Knock the bank down one target at a time.
+    for (const target of g.parts.bank) g._hitBankTarget(target);
+
+    check('the bank completing arms an encounter', g.run.encounterArmed === true);
+    check('_armedMode reports it', g._armedMode() === 'encounter');
+    check('the bank resets so it can be cleared again',
+          g.parts.bank.every(t => t.active) && g.run.bank.every(v => v === false));
+    check('bankComplete fired once', events.filter(e => e.t === 'bankComplete').length === 1);
+
+    // A target already down must not score twice.
+    const before = g.run.score;
+    g.parts.bank[0].active = false;
+    g._hitBankTarget(g.parts.bank[0]);
+    check('a target that is already down scores nothing', g.run.score === before);
+  }
+
+  group('game: top lanes upgrade the disc');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+
+    for (const lane of g.parts.topLanes) g._hitTopLane(lane);
+    check('completing the lanes upgrades the disc', g.run.discTier === 1, String(g.run.discTier));
+    check('discUpgrade fired', events.some(e => e.t === 'discUpgrade'));
+    check('the lanes reset', g.run.lanes.every(v => v === false));
+
+    for (let round = 0; round < 5; round++) {
+      for (const lane of g.parts.topLanes) g._hitTopLane(lane);
+    }
+    check('the disc stops at Master', g.run.discTier === MAX_DISC_TIER, String(g.run.discTier));
+    check('a maxed disc still pays out',
+          events.some(e => e.t === 'lanesComplete' && e.p.upgraded === false));
+  }
+
+  group('game: kickbacks');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+    g.plungeRelease();
+
+    check('both kickbacks start armed', g.run.kickback.left && g.run.kickback.right);
+
+    const ball = g.ball;
+    ball.moveTo(LAYOUT.lower.outlanes[0].x, LAYOUT.lower.outlanes[0].y);
+    ball.setVel(0, 40);
+    g._hitOutlane(g.parts.outlanes[0], ball);
+
+    check('the kickback fires the ball back up', ball.vel.y < -150, ball.vel.y.toFixed(1));
+    check('and is then spent', g.run.kickback.left === false);
+    check('kickback fired', events.some(e => e.t === 'kickback'));
+
+    // Spent, it must do nothing the second time.
+    ball.setVel(0, 40);
+    g._hitOutlane(g.parts.outlanes[0], ball);
+    check('a spent kickback does nothing', ball.vel.y > 0, ball.vel.y.toFixed(1));
+
+    // An inlane rearms it, which is the loop that keeps saves stocked.
+    g._handleEvents();
+    const inlane = g.parts.inlanes[0];
+    inlane.onHit = null;
+    g.world.events.push({ type: 'hit', id: inlane.id, collider: inlane, ball, normal: null, speed: 50 });
+    g._handleEvents();
+    check('an inlane rearms that kickback', g.run.kickback.left === true);
+  }
+
+  group('game: ramps');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+    g.plungeRelease();
+
+    const ramp = g.parts.ramps[0];
+
+    // A trickle is not a ramp shot.
+    g._enterRamp(ramp.entrance, g.ball, 10);
+    check('a slow ball is not taken by the ramp', g._ramp === null);
+
+    g._enterRamp(ramp.entrance, g.ball, 200);
+    check('a real shot enters the ramp', g._ramp !== null);
+    check('the ball leaves the simulation', g.ball.held === true);
+    check('ramp fired', events.some(e => e.t === 'ramp'));
+
+    // Walk it along.
+    for (let i = 0; i < 200 && g._ramp; i++) g._advanceRamp(0.016);
+    check('the ramp finishes', g._ramp === null);
+    check('the ball is back in play', g.ball.held === false);
+    check('it is delivered to the opposite inlane',
+          Math.abs(g.ball.pos.x - ramp.exit.x) < 1 && Math.abs(g.ball.pos.y - ramp.exit.y) < 1,
+          `${g.ball.pos.x.toFixed(1)},${g.ball.pos.y.toFixed(1)}`);
+    check('and it is travelling down towards the flipper', g.ball.vel.y > 0);
+
+    // Three ramp shots arm evolution, but only with something to evolve.
+    const g2 = new Game({});
+    g2.start('Neutral');
+    g2.plungeRelease();
+    for (let i = 0; i < 3; i++) {
+      g2._ramp = null;
+      g2.ball.held = false;
+      g2._enterRamp(g2.parts.ramps[0].entrance, g2.ball, 200);
+    }
+    check('nothing to evolve means evolution is not armed', g2.run.evolutionArmed === false);
+
+    g2.run.caught.push({ uid: 'r1', speciesId: speciesByName('Minkpaw').id, shiny: false });
+    g2._ramp = null;
+    g2.ball.held = false;
+    g2.run.rampShots = 2;
+    g2._enterRamp(g2.parts.ramps[0].entrance, g2.ball, 200);
+    check('with something evolvable, three ramps arms it', g2.run.evolutionArmed === true);
+  }
+
+  group('game: the Well and mode priority');
+  {
+    const g = new Game({});
+    g.start('Mystic');
+    g.plungeRelease();
+
+    g._enterSaucer(g.ball);
+    check('the Well holds the ball', g.phase === PHASE.SAUCER && g.ball.held === true);
+    check('the ball is parked in the Well',
+          Math.abs(g.ball.pos.x - LAYOUT.saucer.x) < 0.01);
+
+    // Nothing armed: it kicks back out.
+    g._lastNow = 100000;
+    g._updateSaucer(100000);
+    check('with nothing armed it kicks out', g.phase === PHASE.PLAY && g.ball.held === false);
+    check('and it is kicked upwards', g.ball.vel.y < -150, g.ball.vel.y.toFixed(1));
+
+    // Priority: boss beats evolution beats encounter.
+    g.run.encounterArmed = true;
+    check('encounter when only it is armed', g._armedMode() === 'encounter');
+    g.run.evolutionArmed = true;
+    check('evolution needs something evolvable', g._armedMode() === 'encounter');
+    g.run.caught.push({ uid: 'r1', speciesId: speciesByName('Meditot').id, shiny: false });
+    check('evolution outranks encounter', g._armedMode() === 'evolution');
+    g.run.gateArmed = true;
+    check('the boss outranks everything', g._armedMode() === 'boss');
+  }
+
+  group('game: encounter and capture');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Mechanic');
+    g.plungeRelease();
+
+    g.run.encounterArmed = true;
+    g._enterSaucer(g.ball);
+    g._lastNow = 200000;
+    g._updateSaucer(200000);
+
+    check('the encounter starts', g.phase === PHASE.ENCOUNTER, g.phase);
+    check('a creature of the right type appeared',
+          g.sub?.sp?.type === 'Mechanic', g.sub?.sp?.type);
+    check('it is a stage 1 catchable', g.sub.sp.stage === 1 && g.sub.sp.effectiveRarity < 5);
+    check('the meter is sized by rarity',
+          g.sub.meterMax === CAPTURE_METER[g.sub.sp.effectiveRarity], String(g.sub.meterMax));
+    check('a collider was spawned for it', !!g.sub.collider);
+    check('the collider is in the world', g.world.colliders.includes(g.sub.collider));
+    check('encounterStart fired', events.some(e => e.t === 'encounterStart'));
+    check('the arm was consumed', g.run.encounterArmed === false);
+    check('the ball is back in play', g.ball.held === false);
+
+    // The creature must drift, or it is not a moving target.
+    const x0 = g.sub.x, y0 = g.sub.y;
+    for (let i = 0; i < 30; i++) g._driftCreature(g.sub, 0.016);
+    check('the creature drifts', Math.hypot(g.sub.x - x0, g.sub.y - y0) > 1);
+    check('the collider follows it',
+          g.sub.collider.c.x === g.sub.x && g.sub.collider.c.y === g.sub.y);
+
+    // It must stay inside its box however long it runs.
+    for (let i = 0; i < 4000; i++) g._driftCreature(g.sub, 0.016);
+    check('the creature stays in the upper field',
+          g.sub.y > 40 && g.sub.y < 112 && g.sub.x > 14 && g.sub.x < 71,
+          `${g.sub.x.toFixed(1)},${g.sub.y.toFixed(1)}`);
+
+    /* Hits: one per approach, not one per frame. */
+    const target = g.sub;
+    const needed = Math.ceil(target.meterMax / DISC_TIERS[g.run.discTier].power);
+    let hits = 0;
+    for (let i = 0; i < needed; i++) {
+      g.ball.moveTo(target.x, target.y);          // touching
+      g._creatureContacts(target, () => hits++);
+      g.ball.moveTo(target.x + 40, target.y);     // clear again
+      g._creatureContacts(target, () => {});
+    }
+    check('each approach counts once', hits === needed, `${hits} of ${needed}`);
+
+    // Resting against it must not machine-gun the meter.
+    let spam = 0;
+    g.ball.moveTo(target.x, target.y);
+    for (let i = 0; i < 50; i++) g._creatureContacts(target, () => spam++);
+    check('sitting on the creature scores once', spam === 1, String(spam));
+  }
+
+  group('game: a capture registers and can open the gate');
+  {
+    await store.startFresh();
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Mechanic');
+    g.plungeRelease();
+
+    // Drive three captures straight through the mode.
+    for (let i = 0; i < GATE_CATCHES_NEEDED; i++) {
+      g.run.encounterArmed = true;
+      g._enterSaucer(g.ball);
+      g._lastNow = 300000 + i * 10000;
+      g._updateSaucer(g._lastNow);
+      check(`encounter ${i + 1} started`, g.phase === PHASE.ENCOUNTER);
+      g.sub.meter = 0;
+      g._updateEncounter(0.016);
+      check(`capture ${i + 1} completed`, g.phase === PHASE.PLAY && g.sub === null);
+    }
+
+    check('three catches counted', g.run.catches === 3, String(g.run.catches));
+    check('the run remembers what it caught', g.run.caught.length === 3);
+    check('the dex was written', store.registeredCount('Mechanic') >= 1,
+          String(store.registeredCount('Mechanic')));
+    check('the creature collider was cleaned up',
+          !g.world.colliders.some(c => c.meta?.role === 'creature'));
+    check('the gate opened', g.run.gateArmed === true);
+    check('a boss was announced',
+          events.some(e => e.t === 'armed' && e.p.what === 'boss'));
+    check('capture events carried the species',
+          events.filter(e => e.t === 'capture').every(e => !!e.p.species));
+
+    // Captures are worth more than the small stuff.
+    check('a capture scored properly', g.run.score > 12000, String(g.run.score));
+  }
+
+  group('game: an encounter can be lost');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Wind');
+    g.plungeRelease();
+
+    g.run.encounterArmed = true;
+    g._enterSaucer(g.ball);
+    g._lastNow = 400000;
+    g._updateSaucer(400000);
+
+    g.sub.seconds = 0.01;
+    g._updateEncounter(0.05);
+    check('the timer running out lets it escape', g.sub === null && g.phase === PHASE.PLAY);
+    check('escape fired with a reason',
+          events.some(e => e.t === 'escape' && e.p.reason === 'time'));
+    check('the collider was removed',
+          !g.world.colliders.some(c => c.meta?.role === 'creature'));
+    check('the escape was counted', g.run.escapes === 1);
+
+    // Draining mid-encounter also loses it.
+    g.run.encounterArmed = true;
+    g._enterSaucer(g.ball);
+    g._lastNow = 410000;
+    g._updateSaucer(410000);
+    g.run.ballSaveFor = 0;
+    g.ball.moveTo(LAYOUT.centre, g.world.drainY + 5);
+    g._checkDrain();
+    check('draining ends the encounter', g.sub === null);
+    check('and loses the ball', g.phase === PHASE.BALL_LOST, g.phase);
+    check('escape reported the drain',
+          events.some(e => e.t === 'escape' && e.p.reason === 'drain'));
+  }
+
+  group('game: evolution');
+  {
+    await store.startFresh();
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Mystic');
+    g.plungeRelease();
+
+    const meditot = speciesByName('Meditot');       // Meditot -> Zenquaza
+    g.run.caught.push({ uid: 'r1', speciesId: meditot.id, shiny: true });
+    g.run.evolutionArmed = true;
+
+    check('_evolvable finds it', g._evolvable().length === 1);
+
+    g._enterSaucer(g.ball);
+    g._lastNow = 500000;
+    g._updateSaucer(500000);
+
+    check('evolution mode starts', g.phase === PHASE.EVOLUTION, g.phase);
+    check('it picked the right creature', g.sub.from.id === meditot.id);
+    check('and the right target', g.sub.to.name === 'Zenquaza', g.sub.to.name);
+    check('it carries the shiny across', g.sub.shiny === true);
+    check('shards start at zero', g.sub.shards === 0);
+    check('the bank was reset for shards', g.parts.bank.every(t => t.active));
+    check('evolutionStart fired', events.some(e => e.t === 'evolutionStart'));
+
+    // Hitting the creature before the shards are in must not evolve it.
+    g.ball.moveTo(g.sub.x, g.sub.y);
+    g._updateEvolution(0.016);
+    check('an early hit does not evolve it', g.phase === PHASE.EVOLUTION && g.sub !== null);
+
+    // Collect the shards off the bank.
+    for (let i = 0; i < EVOLUTION_SHARDS; i++) g._hitBankTarget(g.parts.bank[i]);
+    check('shards collected', g.sub.shards === EVOLUTION_SHARDS, String(g.sub.shards));
+    check('evolutionReady fired', events.some(e => e.t === 'evolutionReady'));
+
+    // Now the hit lands.
+    g.ball.moveTo(g.sub.x + 40, g.sub.y);
+    g._creatureContacts(g.sub, () => {});          // clear the tag
+    g.ball.moveTo(g.sub.x, g.sub.y);
+    g._updateEvolution(0.016);
+
+    check('it evolves', g.sub === null && g.phase === PHASE.PLAY);
+    check('evolve fired', events.some(e => e.t === 'evolve'));
+    check('Zenquaza is registered', store.isRegistered(speciesByName('Zenquaza').id));
+    check('the evolved shiny entered the dex',
+          store.hasShiny(speciesByName('Zenquaza').id) === true);
+    check('the run entry followed the creature',
+          g.run.caught[0].speciesId === speciesByName('Zenquaza').id);
+    check('the evolution was counted', g.run.evolutions === 1);
+    check('the collider was cleaned up',
+          !g.world.colliders.some(c => c.meta?.role === 'creature'));
+
+    // Zenquaza is a final form, so there is nothing left to evolve.
+    check('a final form is not evolvable', g._evolvable().length === 0);
+  }
+
+  group('game: a three-stage line can be taken all the way in one game');
+  {
+    await store.startFresh();
+    const g = new Game({});
+    g.start('Mystic');
+    g.plungeRelease();
+
+    // Spiritfoil -> Nebulicorn -> Wraithhorn
+    g.run.caught.push({ uid: 'r1', speciesId: speciesByName('Spiritfoil').id, shiny: false });
+
+    for (const expected of ['Nebulicorn', 'Wraithhorn']) {
+      g.run.evolutionArmed = true;
+      g.ball.held = false;
+      g._enterSaucer(g.ball);
+      g._lastNow += 10000;
+      g._updateSaucer(g._lastNow);
+      check(`evolution mode started for ${expected}`, g.phase === PHASE.EVOLUTION, g.phase);
+      check(`target is ${expected}`, g.sub.to.name === expected, g.sub.to.name);
+      g.sub.shards = EVOLUTION_SHARDS;
+      g.ball.moveTo(g.sub.x, g.sub.y);
+      g._updateEvolution(0.016);
+      check(`${expected} registered`, store.isRegistered(speciesByName(expected).id));
+    }
+    check('the whole line is in the dex', store.registeredCount('Mystic') === 2,
+          String(store.registeredCount('Mystic')));
+  }
+
+  group('game: boss stage');
+  {
+    await store.startFresh();
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Wind');
+    g.plungeRelease();
+
+    g.run.gateArmed = true;
+    g._enterSaucer(g.ball);
+    g._lastNow = 600000;
+    g._updateSaucer(600000);
+
+    check('the boss stage starts', g.phase === PHASE.BOSS, g.phase);
+    check('it is the type legendary', g.sub.sp.name === 'Pyrosora', g.sub.sp?.name);
+    check('a legendary takes a lot of hits', g.sub.meterMax === CAPTURE_METER[5]);
+    check('the gate was consumed', g.run.gateArmed === false);
+    check('bossStart fired', events.some(e => e.t === 'bossStart'));
+
+    /* The shield must actually alternate, or the boss is one repeated shot. */
+    const seen = new Set();
+    for (let i = 0; i < 600; i++) { g._updateBoss(0.05); seen.add(g.sub?.shielded); if (!g.sub) break; }
+    check('the shield goes up and down', seen.has(true) && seen.has(false));
+
+    // A blocked hit must not reduce the meter.
+    const g2 = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g2.start('Mystic');
+    g2.plungeRelease();
+    g2.run.gateArmed = true;
+    g2._enterSaucer(g2.ball);
+    g2._lastNow = 700000;
+    g2._updateSaucer(700000);
+
+    g2.sub.shielded = true;
+    g2.sub.shieldTimer = 99;
+    const meterBefore = g2.sub.meter;
+    g2.ball.moveTo(g2.sub.x, g2.sub.y);
+    g2._updateBoss(0.016);
+    check('a shielded hit does not damage it', g2.sub.meter === meterBefore, String(g2.sub.meter));
+    check('bossBlocked fired', events.some(e => e.t === 'bossBlocked'));
+
+    // Unshielded, it does.
+    g2.sub.shielded = false;
+    g2.sub.shieldTimer = 99;
+    g2.ball.moveTo(g2.sub.x + 40, g2.sub.y);
+    g2._creatureContacts(g2.sub, () => {});
+    g2.ball.moveTo(g2.sub.x, g2.sub.y);
+    g2._updateBoss(0.016);
+    check('an unshielded hit does damage it', g2.sub.meter < meterBefore, String(g2.sub.meter));
+
+    // Win it.
+    g2.sub.meter = 0;
+    g2._updateBoss(0.016);
+    check('beating it captures the legendary', g2.sub === null && g2.phase === PHASE.PLAY);
+    check('Pheonyx is registered', store.isRegistered(speciesByName('Pheonyx').id));
+    check('the boss win was recorded', store.bossWins('Mystic') === 1);
+    check('bossWin fired', events.some(e => e.t === 'bossWin'));
+    check('it is worth a lot', g2.run.score >= SCORE.captureRarity[5], String(g2.run.score));
+  }
+
+  group('game: every mode has a reachable boss');
+  {
+    for (const t of TYPES) {
+      await store.startFresh();
+      const g = new Game({});
+      g.start(t);
+      g.plungeRelease();
+      g.run.gateArmed = true;
+      g._enterSaucer(g.ball);
+      g._lastNow = 800000;
+      g._updateSaucer(800000);
+      check(`${t} reaches its boss stage`, g.phase === PHASE.BOSS, g.phase);
+      g.sub.meter = 0;
+      g.sub.shielded = false;
+      g._updateBoss(0.016);
+      check(`  ${t}'s legendary can be captured`, store.bossWins(t) === 1);
+    }
+  }
+
+  group('game: ball save, losing balls and game over');
+  {
+    await store.startFresh();
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+    g.plungeRelease();
+
+    check('the ball save is on at the start of a ball', g.run.ballSaveFor > 0);
+
+    g.ball.moveTo(LAYOUT.centre, g.world.drainY + 5);
+    g._checkDrain();
+    check('the ball save returns the ball', g.phase === PHASE.PLUNGE, g.phase);
+    check('ballSave fired', events.some(e => e.t === 'ballSave'));
+    check('the save is used up', g.run.ballSaveFor === 0);
+    check('and it is still ball one', g.run.ballNumber === 1);
+
+    // Now really lose all three.
+    for (let ball = 1; ball <= 3; ball++) {
+      g.plungeRelease();
+      g.run.ballSaveFor = 0;
+      g.ball.moveTo(LAYOUT.centre, g.world.drainY + 5);
+      g._checkDrain();
+      check(`ball ${ball} is lost`, g.phase === PHASE.BALL_LOST, g.phase);
+      g._lastNow += (BALL_LOST_PAUSE * 1000);
+      g.update(g._lastNow + 1);
+    }
+
+    check('the game is over after three', g.phase === PHASE.GAME_OVER, g.phase);
+    check('gameOver fired', events.some(e => e.t === 'gameOver'));
+    check('the game was filed', store.s.stats.games === 1, String(store.s.stats.games));
+
+    const over = events.find(e => e.t === 'gameOver');
+    check('the result carries a rank', over.p.rank === null || over.p.rank >= 1);
+    check('the result carries the mode', over.p.type === 'Neutral');
+  }
+
+  group('game: extra balls');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+
+    g._award(EXTRA_BALL_AT[0], { mult: false });
+    check('crossing the threshold awards an extra ball', g.run.ballsLeft === 4, String(g.run.ballsLeft));
+    check('extraBall fired', events.filter(e => e.t === 'extraBall').length === 1);
+
+    g._award(1000, { mult: false });
+    check('it is not awarded twice', events.filter(e => e.t === 'extraBall').length === 1);
+
+    g._award(EXTRA_BALL_AT[1], { mult: false });
+    check('the second threshold awards another', g.run.ballsLeft === 5, String(g.run.ballsLeft));
+  }
+
+  group('game: tilt');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+    g.plungeRelease();
+
+    check('nudging is refused before launch', new Game({}).nudge(1) === false);
+
+    let allowed = 0;
+    for (let i = 0; i < 10; i++) if (g.nudge(-1)) allowed++;
+    check('a few nudges are allowed', allowed >= 1, String(allowed));
+    check('leaning on it tilts', g.world.tilted === true);
+    check('tilt fired', events.some(e => e.t === 'tilt'));
+    check('the flippers die', g.parts.flippers.left.active === false);
+
+    g.flip('left', true);
+    check('flipping does nothing while tilted', g.parts.flippers.left.up === false);
+
+    // The flippers come back with the next ball.
+    g.run.ballSaveFor = 0;
+    g.ball.moveTo(LAYOUT.centre, g.world.drainY + 5);
+    g._checkDrain();
+    g._lastNow += (BALL_LOST_PAUSE * 1000);
+    g.update(g._lastNow + 1);
+    check('the next ball restores the flippers', g.parts.flippers.left.active === true);
+    check('and clears the tilt', g.world.tilted === false);
+  }
+
+  group('game: type shift');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+    g.plungeRelease();
+    g._award(50000, { mult: false });
+    const scoreBefore = g.run.score;
+    g.run.discTier = 2;
+
+    check('no charge to begin with', g.run.shiftCharges === 0);
+
+    // Work the spinner.
+    for (let i = 0; i < SPINS_PER_SHIFT; i++) {
+      g.world.events.push({
+        type: 'hit', id: 'spinner', collider: g.parts.spinner, ball: g.ball, normal: null, speed: 80
+      });
+      g._handleEvents();
+    }
+    check('the spinner charges a shift', g.run.shiftCharges === 1, String(g.run.shiftCharges));
+    check('shiftCharged fired', events.some(e => e.t === 'shiftCharged'));
+
+    g._enterSaucer(g.ball);
+    g._lastNow = 900000;
+    g._updateSaucer(900000);
+    check('the Well offers a shift', events.some(e => e.t === 'shiftOffer'));
+    check('the ball waits, held', g.ball.held === true && g.phase === PHASE.SAUCER);
+
+    // Waiting must not drain or time out.
+    for (let i = 0; i < 200; i++) { g._lastNow += 16; g.update(g._lastNow); }
+    check('it waits indefinitely', g.phase === PHASE.SAUCER && g.ball.held === true);
+
+    check('declining is possible', g.declineShift() === true);
+    check('declining kicks the ball out', g.phase === PHASE.PLAY && g.ball.held === false);
+    check('and keeps the charge', g.run.shiftCharges === 1);
+
+    // Take the offer this time.
+    g._enterSaucer(g.ball);
+    g._lastNow += 5000;
+    g._updateSaucer(g._lastNow);
+    check('a bad type is refused', g.chooseShift('Nonsense') === false);
+    check('shifting to the current type is refused', g.chooseShift('Neutral') === false);
+    check('shifting works', g.chooseShift('Celestial') === true);
+
+    check('the mode changed', g.run.type === 'Celestial' && g.mode.type === 'Celestial');
+    check('the table was rebuilt', g.parts.gimmick.id === 'bloom', g.parts.gimmick.id);
+    check('the charge was spent', g.run.shiftCharges === 0);
+    check('the score carried over', g.run.score > scoreBefore, String(g.run.score));
+    check('the disc carried over', g.run.discTier === 2);
+    check('a new ball is served', g.phase === PHASE.PLUNGE && g.ball.held === true);
+    check('typeShift fired', events.some(e => e.t === 'typeShift'));
+  }
+
+  group('game: nothing may kick the ball back into the Well');
+  {
+    /**
+     * The regression test for a lock that made the game unplayable.
+     *
+     * Wildwood Green had its stump bumper at (42.5, 100), 24 units directly
+     * above the Awakening Well. The Well ejects upwards, so the ball struck the
+     * bumper from below, the contact normal pointed straight back down, and the
+     * bumper's kick drove it into the hole it had just left. Which ejected it
+     * into the bumper again. For as long as you cared to watch.
+     */
+    const S = LAYOUT.saucer;
+    const box = {
+      x0: S.x - S.exit.halfWidth,
+      x1: S.x + S.exit.halfWidth,
+      y0: S.exit.top,
+      y1: S.y - S.r
+    };
+    const reach = new Ball({}).r;
+
+    const nearBox = (px, py, pad) => {
+      const cx = Math.max(box.x0, Math.min(box.x1, px));
+      const cy = Math.max(box.y0, Math.min(box.y1, py));
+      return Math.hypot(px - cx, py - cy) < pad;
+    };
+
+    /** Does this collider's surface reach into the Well's exit corridor? */
+    const inCorridor = c => {
+      if (c.sensor || !c.active) return false;
+      if (c.kind === 'circle') return nearBox(c.c.x, c.c.y, c.r + reach);
+      if (c.kind === 'seg') {
+        for (let t = 0; t <= 1; t += 0.05) {
+          const px = c.a.x + (c.b.x - c.a.x) * t;
+          const py = c.a.y + (c.b.y - c.a.y) * t;
+          if (nearBox(px, py, (c.thick || 0.6) + reach)) return true;
+        }
+        return false;
+      }
+      if (c.kind === 'arc') {
+        for (let i = 0; i <= 60; i++) {
+          const a = c.a0 + (c.sweep * i) / 60;
+          const px = c.c.x + Math.cos(a) * c.r;
+          const py = c.c.y + Math.sin(a) * c.r;
+          if (nearBox(px, py, (c.thick || 0.6) + reach)) return true;
+        }
+        return false;
+      }
+      return false;
+    };
+
+    for (const t of TYPES) {
+      const { world } = buildTable(t);
+      const kickers = world.colliders.filter(c => (c.kick || 0) > 0 && inCorridor(c));
+      check(`${t} has no kicker above the Well`, kickers.length === 0,
+            kickers.map(c => `${c.id}@${c.kind === 'circle' ? `${c.c.x},${c.c.y}` : '?'}`).join(' '));
+
+      // Walls are allowed — they deflect sideways — but it is worth knowing.
+      const blockers = world.colliders.filter(c => !(c.kick > 0) && inCorridor(c));
+      if (blockers.length) note(`${t}: ${blockers.length} non-kicking collider(s) in the corridor: ${blockers.map(c => c.id).join(', ')}`);
+    }
+  }
+
+  group('game: the Well ejects at an angle and escalates');
+  {
+    const g = new Game({});
+    g.start('Neutral');
+    g.plungeRelease();
+    g._lastNow = 100000;
+
+    const eject = () => {
+      g.ball.held = false;
+      g._kickOutOfSaucer();
+      return { x: g.ball.vel.x, y: g.ball.vel.y };
+    };
+
+    const a = eject();
+    const b = eject();
+    check('the ejection is never straight up', Math.abs(a.x) > 5, a.x.toFixed(1));
+    check('it alternates sides', Math.sign(a.x) !== Math.sign(b.x),
+          `${a.x.toFixed(1)} then ${b.x.toFixed(1)}`);
+    check('it still mostly goes up', a.y < -150 && b.y < -150, `${a.y.toFixed(1)}`);
+    check('the speed is unchanged by the angle',
+          Math.abs(Math.hypot(a.x, a.y) - SAUCER_KICK) < 1, Math.hypot(a.x, a.y).toFixed(1));
+
+    // A quick re-entry widens the next one.
+    const shallow = Math.abs(a.x);
+    g.ball.held = false;
+    g._enterSaucer(g.ball);
+    check('a quick return counts as a lock', g._saucerLocks === 1, String(g._saucerLocks));
+    const c = eject();
+    check('the angle widens after a lock', Math.abs(c.x) > shallow * 1.5,
+          `${shallow.toFixed(1)} -> ${Math.abs(c.x).toFixed(1)}`);
+
+    // The phase has to be reset between entries: _enterSaucer refuses when the
+    // ball is already in the Well, so without this the escalation only ever
+    // reaches one and the test would pass for the wrong reason.
+    for (let i = 0; i < 6; i++) {
+      g.phase = PHASE.PLAY;
+      g.ball.held = false;
+      g._enterSaucer(g.ball);
+    }
+    check('escalation is capped', g._saucerLocks === SAUCER_MAX_ESCALATION, String(g._saucerLocks));
+    const wide = eject();
+    check('at full escalation it is fired sideways', Math.abs(wide.x) > 100, Math.abs(wide.x).toFixed(1));
+
+    // A slow return is an ordinary shot, not a lock.
+    g._lastNow += SAUCER_RELOCK_MS * 2;
+    g.phase = PHASE.PLAY;
+    g.ball.held = false;
+    g._enterSaucer(g.ball);
+    check('a slow return resets the escalation', g._saucerLocks === 0, String(g._saucerLocks));
+  }
+
+  group('game: the ball escapes the Well in every mode');
+  {
+    /**
+     * The dynamic version, which is what actually caught the bug: drop the ball
+     * in the Well and then just let the game run. A locked table re-enters
+     * roughly every 0.85 s, so twenty-five seconds of it is around thirty
+     * entries. Anything healthy is in single figures.
+     */
+    for (const t of TYPES) {
+      let entries = 0;
+      const g = new Game({ onEvent: (type) => { if (type === 'saucer') entries++; } });
+      g.start(t);
+      g.plungeRelease();
+      g.run.ballSaveFor = 0;                  // let it drain if it wants to
+
+      let now = 1000;
+      g.update(now);
+      g.ball.held = false;
+      g.ball.moveTo(LAYOUT.saucer.x, LAYOUT.saucer.y);
+      g.ball.freeze();
+
+      for (let i = 0; i < 25 * 60; i++) {     // 25 s at 60 fps
+        now += 1000 / 60;
+        g.update(now);
+        if (g._awaitingShift) g.declineShift();
+      }
+
+      check(`${t} does not lock in the Well`, entries < 8, `${entries} entries in 25 s`);
+    }
+  }
+
+  group('game: ball search breaks a lock the layout did not');
+  {
+    const events = [];
+    const g = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g.start('Neutral');
+    g.plungeRelease();
+    g.run.ballSaveFor = 0;
+
+    let now = 1000;
+    g.update(now);
+
+    // Pin the ball inside a tiny area, whatever the physics wants to do — the
+    // shape any real lock takes.
+    for (let i = 0; i < 26 * 60; i++) {
+      now += 1000 / 60;
+      g.ball.moveTo(40 + (i % 3), 90 + (i % 4));
+      g.ball.setVel(60, -60);
+      g.update(now);
+    }
+
+    const searches = events.filter(e => e.t === 'ballSearch');
+    check('a confined ball triggers a search', searches.length >= 1, `${searches.length} searches`);
+    check('the first search waited, rather than firing at once',
+          searches.length === 0 || searches[0].p.attempt === 1);
+
+    /**
+     * And it has to survive the ball being held.
+     *
+     * The lock this guard was written for spent most of its cycle held in the
+     * Well. Clearing the box on `held`, or treating the SAUCER phase as not
+     * live, restarted the count every cycle — so the guard would have watched
+     * the exact failure it exists for and never fired.
+     */
+    const gh = new Game({});
+    gh.start('Neutral');
+    gh.plungeRelease();
+    gh.update(1000);
+    gh.ball.moveTo(40, 100);
+    gh.update(1016);
+    check('a box is being tracked', !!gh._penBox);
+
+    gh.ball.held = true;
+    gh.phase = PHASE.SAUCER;
+    gh.update(1032);
+    check('the Well does not reset the confinement box', !!gh._penBox);
+
+    gh.phase = PHASE.PLUNGE;
+    gh.update(1048);
+    check('but the plunger does', gh._penBox === null);
+
+    // And the shove is real.
+    const g2 = new Game({});
+    g2.start('Neutral');
+    g2.plungeRelease();
+    g2.update(1000);
+    g2._penBox = { x0: 40, x1: 41, y0: 90, y1: 91 };
+    g2._penSince = 0;
+    g2.ball.moveTo(40, 90);
+    g2.ball.setVel(0, 0);
+    g2._ballSearch(SEARCH_AFTER_MS + 100);
+    check('the search actually shoves the ball', g2.ball.speed > 40, g2.ball.speed.toFixed(1));
+    check('and it shoves away from the near wall', g2.ball.vel.x > 0, g2.ball.vel.x.toFixed(1));
+
+    // Ordinary play must never trip it.
+    let g3Searches = 0;
+    const g3 = new Game({ onEvent: (t) => { if (t === 'ballSearch') g3Searches++; } });
+    g3.start('Mechanic');
+    g3.plungeRelease();
+    let n3 = 1000;
+    for (let i = 0; i < 30 * 60; i++) {
+      n3 += 1000 / 60;
+      if (i % 26 === 0) { g3.flip('left', true); g3.flip('right', true); }
+      if (i % 26 === 9) { g3.flip('left', false); g3.flip('right', false); }
+      g3.update(n3);
+      if (g3._awaitingShift) g3.declineShift();
+    }
+    check('normal play does not trigger a search', g3Searches === 0, String(g3Searches));
+  }
+
+  group('game: pausing is safe for as long as you like');
+  {
+    const g = new Game({});
+    g.start('Neutral');
+    g.plungeRelease();
+    g.update(50000);
+
+    g.parts.flippers.left.up = true;
+    g.parts.flippers.right.up = true;
+    g._saucerUntil = 50000 + 700;
+    g._ballLostUntil = 50000 + 1600;
+    g._penSince = 50000;
+
+    const before = { saucer: g._saucerUntil, lost: g._ballLostUntil, pen: g._penSince };
+
+    g.pause();
+    check('pausing sets paused', g.paused === true);
+    check('pausing drops both flippers',
+          g.parts.flippers.left.up === false && g.parts.flippers.right.up === false);
+
+    // A real wait, so the shift is measured rather than assumed.
+    await new Promise(r => setTimeout(r, 120));
+    g.resume();
+
+    check('resuming clears paused', g.paused === false);
+    const shift = g._saucerUntil - before.saucer;
+    check('the Well timer was carried forward', shift > 60, `${shift.toFixed(0)} ms`);
+    check('so was the between-balls timer',
+          Math.abs((g._ballLostUntil - before.lost) - shift) < 5);
+    check('so was the ball-search window',
+          Math.abs((g._penSince - before.pen) - shift) < 5);
+    check('the physics clock is reset so nothing fast-forwards', g._lastNow === 0);
+
+    // Updating while paused must do nothing at all.
+    g.pause();
+    const y = g.ball.pos.y;
+    for (let i = 0; i < 60; i++) g.update(60000 + i * 16);
+    check('a paused game does not move the ball', g.ball.pos.y === y);
+    g.resume();
+
+    check('double pause and resume are harmless', (() => {
+      try { g.pause(); g.pause(); g.resume(); g.resume(); return true; }
+      catch { return false; }
+    })());
+  }
+
+  group('game: a full frame loop runs without throwing');
+  {
+    /**
+     * The closest thing to actually playing: launch and run twenty simulated
+     * seconds of frames with the flippers working, in every mode. Anything
+     * that throws inside update() kills the render loop and the game with it,
+     * so this is the check that matters most.
+     */
+    for (const t of TYPES) {
+      const g = new Game({});
+      g.start(t);
+
+      let threw = null;
+      let now = 1000;
+      try {
+        g.plungeStart();
+        for (let i = 0; i < 20; i++) { now += 16; g.update(now); }
+        g.plungeRelease();
+
+        for (let i = 0; i < 1200; i++) {         // ~20 s at 60 fps
+          now += 16;
+          // Work the flippers on a rhythm, and arm things periodically so the
+          // sub-modes get exercised too.
+          if (i % 24 === 0) { g.flip('left', true); g.flip('right', true); }
+          if (i % 24 === 8) { g.flip('left', false); g.flip('right', false); }
+          if (i % 200 === 0) g.run && (g.run.encounterArmed = true);
+          g.update(now);
+          if (g._awaitingShift) g.declineShift();
+        }
+      } catch (e) { threw = e.stack || e.message; }
+
+      check(`${t} survives 20 s of play`, threw === null, threw ? threw.split('\n')[0] : '');
+      check(`  ${t} ended in a sane phase`,
+            Object.values(PHASE).includes(g.phase), g.phase);
+      check(`  ${t} kept the score finite`,
+            Number.isFinite(g.run?.score ?? 0), String(g.run?.score));
+      check(`  ${t} leaked no creature colliders`,
+            g.phase === PHASE.GAME_OVER || !g.sub
+              ? !g.world.colliders.some(c => c.meta?.role === 'creature') || !!g.sub
+              : true);
+    }
+  }
+
+  /* =====================================================
+     Renderer
+     ===================================================== */
+  group('render: transform and drawing');
+  {
+    // A real, laid-out canvas: getBoundingClientRect returns zeros for a
+    // detached element, and the whole transform is derived from it.
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'position:fixed;left:0;top:0;width:360px;height:760px';
+    document.body.append(canvas);
+
+    const r = new Renderer(canvas).resize();
+
+    check('scale fits the table by its tighter axis',
+          Math.abs(r.scale - Math.min(360 / 100, 760 / 180)) < 1e-9, r.scale.toFixed(4));
+    check('the table is centred', r.originX >= 0 && r.originY >= 0,
+          `${r.originX.toFixed(1)},${r.originY.toFixed(1)}`);
+    check('the backing store respects a capped DPR', r.dpr <= 2 && r.dpr > 0, String(r.dpr));
+    check('the canvas has a backing store', canvas.width > 0 && canvas.height > 0,
+          `${canvas.width}x${canvas.height}`);
+
+    // toScreen and toTable must be exact inverses, because input handling
+    // converts touches back into table space for nudges.
+    const back = r.toScreen(37.5, 122.25);
+    const there = r.toTable(back.x, back.y);
+    check('toScreen and toTable round trip',
+          Math.abs(there.x - 37.5) < 1e-6 && Math.abs(there.y - 122.25) < 1e-6,
+          `${there.x.toFixed(4)},${there.y.toFixed(4)}`);
+    check('the table origin maps to the letterbox corner',
+          Math.abs(r.toScreen(0, 0).x - r.originX) < 1e-9);
+
+    // Colour helper: canvas fails silently on a bad colour, so this matters.
+    check('_alpha expands 3-digit hex', r._alpha('#fff', 0.5) === 'rgba(255,255,255,0.5)', r._alpha('#fff', 0.5));
+    check('_alpha handles 6-digit hex', r._alpha('#b07cff', 1) === 'rgba(176,124,255,1)', r._alpha('#b07cff', 1));
+    check('_alpha survives rubbish', r._alpha('nonsense', 0.4).startsWith('rgba('), r._alpha('nonsense', 0.4));
+
+    /* Draw every mode, in the states the game actually puts it in. A throw
+       here kills the render loop and the game with it, so it is worth
+       exercising all of them rather than trusting one. */
+    for (const t of TYPES) {
+      const table = buildTable(t);
+      table.world.addBall(newBall());
+      r.setTable(table);
+
+      const views = [
+        { label: 'plain', view: {} },
+        { label: 'plunging', view: { plunger: 0.6, discTier: 1 } },
+        { label: 'shaking', view: { shake: 0.8, discTier: 3 } },
+        {
+          label: 'encounter',
+          view: {
+            discTier: 2,
+            litLetters: { lanes: [true, false, true], bank: [true, true, false, false, false] },
+            encounter: {
+              sprite: bossOf(t)?.imagePath, shiny: true,
+              x: LAYOUT.centre, y: 92, r: 11, meterFrac: 0.45, flash: 0.7
+            }
+          }
+        },
+        { label: 'no effects', view: { discTier: 0, showTrail: false } }
+      ];
+
+      let threw = null;
+      for (const { label, view } of views) {
+        try {
+          if (label === 'no effects') r.effects = false;
+          r.draw(view);
+          r.effects = true;
+        } catch (e) { threw = `${label}: ${e.message}`; break; }
+      }
+      check(`${t} draws in every state`, threw === null, threw || '');
+    }
+
+    // Resizing mid-game must not leave a stale transform behind.
+    canvas.style.width = '420px';
+    canvas.style.height = '600px';
+    r.resize();
+    check('resize recomputes the scale',
+          Math.abs(r.scale - Math.min(420 / 100, 600 / 180)) < 1e-9, r.scale.toFixed(4));
+    let resizeThrew = null;
+    try { r.draw({ discTier: 1 }); } catch (e) { resizeThrew = e.message; }
+    check('drawing after a resize is fine', resizeThrew === null, resizeThrew || '');
+
+    canvas.remove();
+  }
+
+  group('render: sprite cache');
+  {
+    const a = getSprite('images/Meditot.png');
+    const b = getSprite('images/Meditot.png');
+    check('the same path returns the same element', a === b);
+    check('a null path returns null', getSprite(null) === null);
+    check('spriteReady is false before load', typeof spriteReady(a) === 'boolean');
+
+    // Give it a moment, then confirm a real sprite does become ready â€” this is
+    // what the encounter draw depends on.
+    await new Promise(res => {
+      if (spriteReady(a)) return res();
+      a.addEventListener('load', res, { once: true });
+      a.addEventListener('error', res, { once: true });
+      setTimeout(res, 3000);
+    });
+    check('a real sprite becomes ready', spriteReady(a) === true,
+          `complete=${a.complete} w=${a.naturalWidth}`);
+  }
+
+  group('tuning table sanity');
+  {
+    check('capture meter defined for every rarity', [1, 2, 3, 4, 5].every(r => CAPTURE_METER[r] > 0));
+    check('disc tiers ascend in power', DISC_TIERS.every((d, i) => i === 0 || d.power > DISC_TIERS[i - 1].power));
+    check('a Master Disc beats an Epic in 2 hits',
+          Math.ceil(CAPTURE_METER[4] / DISC_TIERS[3].power) === 2);
+    check('a plain Disc needs 6 hits for an Epic',
+          Math.ceil(CAPTURE_METER[4] / DISC_TIERS[0].power) === 6);
+  }
+}
+
+/**
+ * Hand the run back to tools/testserver.py, which is waiting for exactly one
+ * of these before it shuts down. Opened in an ordinary browser there is no
+ * such endpoint, so the failure is swallowed and the page just shows its
+ * results on screen.
+ */
+async function post(summary, threw) {
+  const body = JSON.stringify({ summary, pass, fail, threw: threw || null, report }, null, 1);
+  try { await fetch('/__result', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } }); }
+  catch { /* no test server; the DOM output is the result */ }
+}
+
+run().then(() => {
+  const summary = fail === 0 ? `ALL ${pass} CHECKS PASSED` : `${fail} FAILED, ${pass} passed`;
+  const s = document.getElementById('summary');
+  s.textContent = summary;
+  s.className = fail === 0 ? 'pass' : 'fail';
+  return post(summary, null);
+}).catch(err => {
+  const threw = err && err.stack ? err.stack : String(err);
+  const summary = `THREW after ${pass} passing checks`;
+  const s = document.getElementById('summary');
+  s.textContent = `${summary}: ${threw}`;
+  s.className = 'fail';
+  fail++;
+  return post(summary, threw);
+});
+</script>
+</body>
+</html>

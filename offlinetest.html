@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Pinball Creatures — offline test</title>
+<style>
+  body { font: 13px/1.55 ui-monospace, Consolas, monospace; background: #0b1024; color: #dfe4f5; padding: 16px; }
+  .pass { color: #4ade80; } .fail { color: #ff6b6b; font-weight: 700; } .note { color: #8b93ad; }
+  h2 { color: #b07cff; margin: 16px 0 6px; font-size: 14px; }
+  #summary { font-size: 15px; font-weight: 700; margin-bottom: 12px; padding: 8px; border: 1px solid #2b3350; }
+  iframe { width: 390px; height: 700px; border: 1px solid #2b3350; margin-top: 14px; background: #000; }
+</style>
+</head>
+<body>
+<!--
+  Proves the game genuinely works with no network.
+
+  Checking that the cache "looks right" is not the same as running from it, so
+  this does the real thing:
+
+    1. Register the service worker and wait for it to finish precaching.
+    2. Tell the server to answer every ordinary GET with 503 (POST /__offline).
+       Control endpoints under /__ keep working so results can still be posted.
+    3. Load index.html in an iframe. Nothing can come from the network now, so
+       whatever boots came out of the cache.
+    4. Check the app came up, drew the table, and can start a game.
+
+  Run with tools\run-offline.ps1.
+-->
+<div id="summary">RUNNING</div>
+<div id="out"></div>
+<iframe id="app-frame" title="app under test, offline"></iframe>
+
+<script type="module">
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+const report = [];
+let currentGroup = '';
+
+function group(name) {
+  currentGroup = name;
+  report.push({ kind: 'group', text: name });
+  out.append(Object.assign(document.createElement('h2'), { textContent: name }));
+}
+
+function check(label, ok, detail = '') {
+  report.push({ kind: ok ? 'pass' : 'fail', group: currentGroup, label, detail: String(detail) });
+  const d = document.createElement('div');
+  d.className = ok ? 'pass' : 'fail';
+  d.textContent = `${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? '  == ' + detail : ''}`;
+  out.append(d);
+  ok ? pass++ : fail++;
+  return ok;
+}
+
+function note(text) {
+  report.push({ kind: 'note', text: String(text) });
+  const d = document.createElement('div');
+  d.className = 'note';
+  d.textContent = '      ' + text;
+  out.append(d);
+}
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+const CACHE_PREFIX = 'pinball-creatures-';
+
+async function ourCache() {
+  const keys = await caches.keys();
+  const name = keys.find(k => k.startsWith(CACHE_PREFIX));
+  return name ? { name, cache: await caches.open(name) } : null;
+}
+
+async function run() {
+  /* =====================================================
+     Register and precache
+     ===================================================== */
+  group('service worker');
+
+  check('service workers are available', 'serviceWorker' in navigator);
+  if (!('serviceWorker' in navigator)) return;
+
+  // Start from nothing, so a cache left by an earlier run cannot make a broken
+  // build look like it works.
+  for (const reg of await navigator.serviceWorker.getRegistrations()) await reg.unregister();
+  for (const key of await caches.keys()) {
+    if (key.startsWith(CACHE_PREFIX)) await caches.delete(key);
+  }
+  note('cleared any previous registration and cache');
+
+  let reg;
+  try {
+    reg = await navigator.serviceWorker.register('sw.js');
+  } catch (e) {
+    check('sw.js registers', false, e.message);
+    return;
+  }
+  check('sw.js registers', true);
+
+  /* Precaching 158 sprites takes a while, and the install promise is what
+     tracks it — so wait for the worker to reach `activated`, not merely for
+     registration to resolve. */
+  const started = performance.now();
+  let active = null;
+  for (let i = 0; i < 600; i++) {                       // up to 60 s
+    active = reg.active || navigator.serviceWorker.controller;
+    if (active && active.state === 'activated') break;
+    await wait(100);
+  }
+  const installMs = Math.round(performance.now() - started);
+  check('the worker activates', !!active && active.state === 'activated',
+        active ? active.state : 'none');
+  note(`activated in ${installMs} ms`);
+
+  /* =====================================================
+     What actually got cached
+     ===================================================== */
+  group('cache contents');
+
+  const found = await ourCache();
+  check('a cache was created', !!found, found?.name || '');
+  if (!found) return;
+
+  const keys = await found.cache.keys();
+  const paths = new Set(keys.map(r => new URL(r.url).pathname));
+  note(`${keys.length} entries in ${found.name}`);
+
+  const CORE = [
+    '/index.html', '/styles.css', '/manifest.webmanifest',
+    '/js/main.js', '/js/data.js', '/js/state.js', '/js/persist.js',
+    '/js/physics.js', '/js/table.js', '/js/render.js', '/js/game.js',
+    '/js/views.js', '/js/audio.js', '/js/ui.js',
+    '/Elemental%20Awakening%20Creatures.csv',
+    '/Elemental%20Awakening%20Creatures%20Stats%20and%20Moves.csv',
+    '/icons/icon-192.png', '/icons/icon-512.png'
+  ];
+
+  const missingCore = CORE.filter(p => !paths.has(p) && !paths.has(decodeURI(p)));
+  check('every core file is cached', missingCore.length === 0, missingCore.join(', '));
+
+  const sprites = [...paths].filter(p => p.startsWith('/images/') || p.startsWith('/shiny/'));
+  check('all 158 sprites are cached', sprites.length === 158, `${sprites.length} cached`);
+
+  /* =====================================================
+     Go offline for real
+     ===================================================== */
+  group('offline');
+
+  const res = await fetch('/__offline', { method: 'POST' });
+  check('the server was switched offline', res.ok || res.status === 204, `HTTP ${res.status}`);
+
+  // Prove it: a path the service worker does not cache must now fail.
+  const probe = await fetch('selftest.html', { cache: 'no-store' }).catch(() => null);
+  check('the network really is down', !probe || !probe.ok,
+        probe ? `HTTP ${probe.status}` : 'fetch rejected');
+
+  /* =====================================================
+     Boot from cache alone
+     ===================================================== */
+  group('booting with no network');
+
+  const frame = document.getElementById('app-frame');
+  const errors = [];
+
+  const hook = win => {
+    if (!win || win.__hooked) return;
+    win.__hooked = true;
+    win.addEventListener('error', e => errors.push(e.message));
+    win.addEventListener('unhandledrejection', e => errors.push('rejection: ' + (e.reason?.message || e.reason)));
+    const realError = win.console.error.bind(win.console);
+    win.console.error = (...a) => { errors.push(a.map(String).join(' ')); realError(...a); };
+  };
+  const hookTimer = setInterval(() => { try { hook(frame.contentWindow); } catch { /* not yet */ } }, 10);
+
+  frame.src = './index.html';
+
+  // Wait for the real document, not about:blank — a fresh iframe is already
+  // 'complete' before it navigates.
+  let doc = null;
+  for (let i = 0; i < 300; i++) {
+    const d = frame.contentDocument;
+    if (d && d.getElementById('boot') && d.readyState !== 'loading') { doc = d; break; }
+    await wait(100);
+  }
+  clearInterval(hookTimer);
+
+  check('index.html was served from cache', !!doc);
+  if (!doc) { await goOnline(); return; }
+
+  let bootedIn = null;
+  for (let i = 0; i < 200; i++) {                       // up to 20 s
+    const app = doc.getElementById('app');
+    if (app && !app.classList.contains('hidden')) { bootedIn = i * 100; break; }
+    await wait(100);
+  }
+
+  const bootMsg = doc.getElementById('boot-msg')?.textContent || '';
+  check('the app boots with no network', bootedIn !== null,
+        bootedIn === null ? `stuck on "${bootMsg}"` : `after ${bootedIn} ms`);
+  check('boot did not report a failure',
+        !doc.getElementById('boot')?.classList.contains('failed'), bootMsg);
+  check('nothing threw', errors.length === 0, errors.slice(0, 3).join(' | '));
+
+  if (bootedIn !== null) {
+    /* ---- the data actually parsed, i.e. the CSVs came from cache ---- */
+    const cells = doc.querySelectorAll('#mode-body .mode-card');
+    check('the mode picker built from cached data', cells.length === 5, String(cells.length));
+
+    /* ---- and the table draws ---- */
+    const canvas = doc.getElementById('table');
+    check('the canvas is sized', canvas.width > 0 && canvas.height > 0, `${canvas.width}x${canvas.height}`);
+
+    await wait(400);
+    const probeCanvas = doc.createElement('canvas');
+    probeCanvas.width = canvas.width;
+    probeCanvas.height = canvas.height;
+    probeCanvas.getContext('2d').drawImage(canvas, 0, 0);
+    const data = probeCanvas.getContext('2d').getImageData(0, 0, probeCanvas.width, probeCanvas.height).data;
+    let lit = 0;
+    for (let i = 0; i < data.length; i += 4 * 97) {
+      if (data[i] + data[i + 1] + data[i + 2] > 40) lit++;
+    }
+    check('the table is drawn offline', lit > 20, `${lit} lit samples`);
+
+    /* ---- a game can be started and played ---- */
+    cells[0]?.click();
+    await wait(600);
+    check('a game starts offline', !doc.getElementById('hud').classList.contains('hidden'));
+
+    const wrap = doc.getElementById('table-wrap');
+    const rect = wrap.getBoundingClientRect();
+    wrap.dispatchEvent(new frame.contentWindow.MouseEvent('mousedown', {
+      clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height * 0.8,
+      bubbles: true, cancelable: true
+    }));
+    await wait(300);
+    frame.contentWindow.dispatchEvent(new frame.contentWindow.MouseEvent('mouseup', { bubbles: true }));
+    await wait(1500);
+    check('the ball can be launched offline', errors.length === 0, errors.slice(0, 3).join(' | '));
+
+    /* ---- sprites render offline, which is what the 12.9 MB was for ---- */
+    doc.querySelector('.nav-btn[data-screen="collection"]')?.click();
+    await wait(500);
+    const imgs = [...doc.querySelectorAll('#collection-body .cell img')];
+    const loaded = imgs.filter(i => i.complete && i.naturalWidth > 0);
+    check('the Collection shows cached sprites', loaded.length > 5,
+          `${loaded.length} of ${imgs.length} loaded`);
+  }
+
+  await goOnline();
+}
+
+async function goOnline() {
+  try { await fetch('/__online', { method: 'POST' }); } catch { /* nothing to do */ }
+}
+
+async function post(summary, threw) {
+  const body = JSON.stringify({ summary, pass, fail, threw: threw || null, report }, null, 1);
+  try { await fetch('/__result', { method: 'POST', body, headers: { 'Content-Type': 'application/json' } }); }
+  catch { /* opened by hand */ }
+}
+
+run().then(() => {
+  const summary = fail === 0 ? `ALL ${pass} CHECKS PASSED` : `${fail} FAILED, ${pass} passed`;
+  const s = document.getElementById('summary');
+  s.textContent = summary;
+  s.className = fail === 0 ? 'pass' : 'fail';
+  return post(summary, null);
+}).catch(async err => {
+  await goOnline();
+  const threw = err && err.stack ? err.stack : String(err);
+  const s = document.getElementById('summary');
+  s.textContent = `THREW after ${pass} passing checks`;
+  s.className = 'fail';
+  fail++;
+  return post(`THREW after ${pass} passing checks`, threw);
+});
+</script>
+</body>
+</html>

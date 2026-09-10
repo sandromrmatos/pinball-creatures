@@ -1,0 +1,9 @@
+# Test runner output. The suites write their real results to %TEMP%; these are
+# only the console transcripts, and they are regenerated on every run.
+*-out.txt
+selftest-result.json
+
+# OS and editor cruft
+Thumbs.db
+desktop.ini
+.DS_Store

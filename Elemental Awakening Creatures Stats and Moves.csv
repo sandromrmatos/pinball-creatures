@@ -1,0 +1,80 @@
+id_output,Name,Stage,Type,Rarity,Evolves to,HP,Attack,Defence,Speed,Move1 Name,Move1 Power,Move1 Level,Move1 Stat Buff,Move1 Stat Buff Percentage,Move2 Name,Move2 Power,Move2 Level,Move2 Stat Buff,Move2 Stat Buff Percentage,Move3 Name,Move3 Power,Move3 Level,Move3 Stat Buff,Move3 Stat Buff Percentage,Move4 Name,Move4 Power,Move4 Level,Move4 Stat Buff,Move4 Stat Buff Percentage
+Elemental Awakening_01,Meditot,Stage 1,Mystic,2,Zenquaza,55,40,55,53,Mind Mirage,32,1,,,Ethereal Echo,43,3,,,,,,,,,,,,
+Elemental Awakening_02,Zenquaza,Stage 2,Mystic,,,88,65,73,74,Mind Mirage,32,1,,,Ethereal Echo,43,3,,,Ether Lash,0,7,Attack,40%,Arcane Spiral,57,10,,
+Elemental Awakening_03,Harmoniqueon,Stage 1,Mystic,4,,107,78,83,72,Cosmic Calm,38,1,,,Phantom Pulse,54,4,,,Soulflare Majesty,0,6,Defence,45%,Arcane Sovereign,76,8,,
+Elemental Awakening_04,Traplet,Stage 1,Mystic,2,Traphex,54,46,44,65,Aura Whisper,22,1,,,Lunar Glow,0,3,Speed,40%,,,,,,,,,,
+Elemental Awakening_05,Traphex,Stage 2,Mystic,,,78,63,56,81,Aura Whisper,22,1,,,Lunar Glow,0,3,Speed,40%,Ethereal Snare,50,7,,,Soulrend,59,8,,
+Elemental Awakening_06,Chimerasprout,Stage 1,Mystic,3,Chimerafluff,50,56,55,56,Psycho Drift,28,1,,,Mental Tackle,45,4,,,,,,,,,,,,
+Elemental Awakening_07,Chimerafluff,Stage 2,Mystic,,Chimereal,67,71,58,59,Psycho Drift,28,1,,,Mental Tackle,45,4,,,Illusion Mist,59,7,,,,,,,
+Elemental Awakening_08,Chimereal,Stage 3,Mystic,,,98,88,72,66,Psycho Drift,28,1,,,Mental Tackle,45,4,,,Illusion Mist,59,7,,,Vision Beam,0,8,Attack,45%
+Elemental Awakening_09,Pheonyx,Stage 1,Mystic,5,,100,80,90,90,Dizzy Shot,35,1,,,Mystic Blaze,47,3,,,Soul Torrent,0,6,Speed,50%,Spirit Surge,70,8,,
+Elemental Awakening_10,Mystikid,Stage 1,Mystic,2,Mystikeon,45,61,45,62,Dreamwave,32,1,,,Dream Booster,45,2,,,Zen Bolt,0,5,Defence,40%,,,,,
+Elemental Awakening_11,Mystikeon,Stage 2,Mystic,,,66,87,63,84,Dreamwave,32,1,,,Dream Booster,45,2,,,Zen Bolt,0,5,Defence,40%,Astral Haunting,66,8,,
+Elemental Awakening_12,Spiritfoil,Stage 1,Mystic,1,Nebulicorn,42,34,46,45,Shade Tackle,31,1,,,Nebula Howl,36,2,,,Wraith Dash,0,7,Speed,40%,,,,,
+Elemental Awakening_13,Nebulicorn,Stage 2,Mystic,,Wraithhorn,59,45,67,67,Shade Tackle,31,1,,,Nebula Howl,36,2,,,Wraith Dash,0,7,Speed,40%,Centric Horizon,60,8,,
+Elemental Awakening_14,Wraithhorn,Stage 3,Mystic,,,91,87,72,80,Shade Tackle,31,1,,,Nebula Howl,36,2,,,Wraith Dash,0,7,Speed,40%,Centric Horizon,66,8,,
+Elemental Awakening_15,Dragomind,Stage 1,Mystic,1,Mindsheer,50,50,50,50,Mind Blaze,19,1,,,Blue Nova,46,3,,,,,,,,,,,,
+Elemental Awakening_16,Mindsheer,Stage 2,Mystic,,Psydrake,65,65,65,65,Mind Blaze,19,1,,,Blue Nova,46,3,,,Brain Freeze,0,6,Attack,40%,Spirit Chant,63,8,,
+Elemental Awakening_17,Psydrake,Stage 3,Mystic,,,82,82,82,82,Mind Blaze,19,1,,,Blue Nova,46,3,,,Brain Freeze,0,6,Attack,40%,Spirit Chant,63,8,,
+Elemental Awakening_18,Zephyrquill,Stage 1,Wind,3,,30,60,30,109,Gale Flow,11,1,,,Light Blow,48,3,,,Whirl Burst,0,6,Attack,40%,Zephyr Strike,78,8,,
+Elemental Awakening_19,Aeruffin,Stage 1,Wind,4,,98,89,61,93,Beak Gust,42,1,,,Gale Flip,42,3,,,Storm Carve,65,7,,,Wind Reaver,0,8,Speed,45%
+Elemental Awakening_20,Stormbud,Stage 1,Wind,2,Blossomgale,30,56,52,73,Budding Wind,15,1,,,Gale Strike,49,3,,,,,,,,,,,,
+Elemental Awakening_21,Blossomgale,Stage 2,Wind,,,60,78,66,88,Budding Wind,15,1,,,Gale Strike,49,3,,,Petal Tornado,60,5,,,Tempest Slice,0,8,Attack,40%
+Elemental Awakening_22,Dodolet,Stage 1,Wind,2,Dodrift,65,55,43,55,Coin Clash,17,1,,,Dice Fury,0,3,Speed,40%,,,,,,,,,,
+Elemental Awakening_23,Dodrift,Stage 2,Wind,,Dodoryphon,73,59,54,69,Coin Clash,17,1,,,Dice Fury,0,3,Speed,40%,Dice Tempest,42,6,,,,,,,
+Elemental Awakening_24,Dodoryphon,Stage 3,Wind,,,78,78,78,89,Coin Clash,17,1,,,Dice Fury,0,3,Speed,40%,Dice Tempest,42,6,,,Cyclone Edge,72,8,,
+Elemental Awakening_25,Aeroquatic,Stage 1,Wind,3,Prismarine,50,67,50,67,Rainbow Surge,30,1,,,Aqua Radiance,45,3,,,Prismatic Dive,61,7,,,,,,,
+Elemental Awakening_26,Prismarine,Stage 2,Wind,,,50,89,55,89,Rainbow Surge,30,1,,,Aqua Radiance,45,3,,,Prismatic Dive,61,7,,,Rainbow Strike,0,9,Attack,40%
+Elemental Awakening_27,Pyrosora,Stage 1,Wind,5,,80,104,78,98,Inferno Wing,42,1,,,Solar Ascend,0,4,Speed,50%,Aerial Fever,64,6,,,Burning Feather,73,9,,
+Elemental Awakening_28,Batakaze,Stage 1,Wind,1,Shadowflit,50,50,25,88,Night Strike,27,1,,,Ethereal Pulse,46,3,,,,,,,,,,,,
+Elemental Awakening_29,Shadowflit,Stage 2,Wind,,,50,80,55,98,Night Strike,27,1,,,Ethereal Pulse,46,3,,,Wraithwind,51,6,,,Soulgust,0,10,Defence,40%
+Elemental Awakening_30,Blushbat,Stage 1,Wind,1,Cerisebat,30,40,30,80,Echo Loop,12,1,,,Pink Gust,44,3,,,,,,,,,,,,
+Elemental Awakening_31,Cerisebat,Stage 2,Wind,,Flutterwing,45,55,33,84,Echo Loop,12,1,,,Pink Gust,44,3,,,Wing Slap,0,6,Speed,40%,,,,,
+Elemental Awakening_32,Flutterwing,Stage 3,Wind,,,65,93,45,97,Echo Loop,12,1,,,Pink Gust,44,3,,,Wing Slap,0,6,Speed,40%,Storm Poison,72,9,,
+Elemental Awakening_33,Dewmo,Stage 1,Neutral,4,,100,82,85,70,Neutral Surge,41,1,,,Knocking Grace,54,3,,,Body Charge,69,6,,,Solit Hit,0,9,Defence,45%
+Elemental Awakening_34,Baklavaff,Stage 1,Neutral,3,Galaktikreme,44,56,62,23,Honey Drizzle,22,1,,,Pastry Crunch,48,3,,,,,,,,,,,,
+Elemental Awakening_35,Galaktikreme,Stage 2,Neutral,,,58,88,109,42,Honey Drizzle,22,1,,,Pastry Crunch,48,3,,,Creamy Confection,57,6,,,Delicious Harmony,0,8,Attack,40%
+Elemental Awakening_36,Antheara East,Stage 1,Neutral,1,,70,50,50,50,Tongue Sweep,14,1,,,Hard Chop,32,2,,,Firm Boost,0,5,Attack,40%,Force Push,51,9,,
+Elemental Awakening_37,Antheara West,Stage 1,Neutral,1,,50,70,50,50,Tongue Sweep,14,1,,,Hard Chop,32,2,,,Firm Boost,0,5,Attack,40%,Force Push,51,9,,
+Elemental Awakening_38,Antheara North,Stage 1,Neutral,1,,50,50,70,50,Tongue Sweep,14,1,,,Hard Chop,32,2,,,Firm Boost,0,5,Attack,40%,Force Push,51,9,,
+Elemental Awakening_39,Antheara South,Stage 1,Neutral,1,,50,50,50,70,Tongue Sweep,14,1,,,Hard Chop,32,2,,,Firm Boost,0,5,Attack,40%,Force Push,51,9,,
+Elemental Awakening_40,Babybara,Stage 1,Neutral,1,Carmibara,45,44,46,42,Muddy Tackle,16,1,,,Crimson Chomp,0,3,Attack,45%,,,,,,,,,,
+Elemental Awakening_41,Carmibara,Stage 2,Neutral,,Reddybara,65,67,61,44,Muddy Tackle,16,1,,,Crimson Chomp,0,3,Attack,45%,,,,,,,,,,
+Elemental Awakening_42,Reddybara,Stage 3,Neutral,,,100,92,93,50,Muddy Tackle,16,1,,,Crimson Chomp,0,3,Attack,45%,River Rush,48,5,,,Risky Recoil,68,9,,
+Elemental Awakening_43,Serafini,Stage 1,Neutral,2,Serafina,40,70,30,70,Heavenly Retreat,21,1,,,Serene Light,48,3,,,,,,,,,,,,
+Elemental Awakening_44,Serafina,Stage 2,Neutral,,,60,89,45,74,Heavenly Retreat,21,1,,,Serene Light,47,3,,,Torrent Whisper,59,6,,,Resourceful Recovery,0,10,Speed,40%
+Elemental Awakening_45,Alpakina,Stage 1,Neutral,4,,85,70,100,83,Energy Snatch,35,1,,,Neutral Smash,48,3,,,Direct Impact,0,7,Defence,40%,Steady Pound,81,9,,
+Elemental Awakening_46,Minkpaw,Stage 1,Neutral,1,Furstream,45,45,55,55,Claw Swipe,32,1,,,Whisker Whip,48,4,,,,,,,,,,,,
+Elemental Awakening_47,Furstream,Stage 2,Neutral,,Lumbertail,62,54,91,65,Claw Swipe,32,1,,,Whisker Whip,48,4,,,,,,,,,,,,
+Elemental Awakening_48,Lumbertail,Stage 3,Neutral,,,66,89,92,76,Claw Swipe,32,1,,,Whisker Whip,48,4,,,Feline Fury,65,7,,,Energy Siphon,0,9,Attack,40%
+Elemental Awakening_49,Floonleef,Stage 1,Celestial,1,Aerobloom,56,34,50,70,Baloon Burst,18,1,,,Swirl,0,2,Speed,40%,,,,,,,,,,
+Elemental Awakening_50,Aerobloom,Stage 2,Celestial,,,78,46,53,98,Baloon Burst,22,1,,,Swirl,0,2,Speed,40%,Rootbind,44,6,,,Bloom Impact,70,10,,
+Elemental Awakening_51,Rosbud,Stage 1,Celestial,2,Rosalia,67,43,59,32,Petal Flick,15,1,,,Fortune Smite,39,3,,,Celestial Blessing,0,7,Defence,40%,,,,,
+Elemental Awakening_52,Rosalia,Stage 2,Celestial,,,109,75,73,44,Petal Flick,15,1,,,Fortune Smite,39,3,,,Celestial Blessing,0,7,Defence,40%,Thorn Break,75,8,,
+Elemental Awakening_53,Verdanthorn,Stage 1,Celestial,4,,125,73,73,66,Thorny Vines,41,1,,,Healing Roots,0,4,Attack,45%,Breeze Bloom,55,5,,,Nature Rend,79,8,,
+Elemental Awakening_54,Faeclover,Stage 1,Celestial,2,Sunbloss,50,70,25,55,Leaf Tickle,17,1,,,Nature's Clap,0,2,Speed,40%,,,,,,,,,,
+Elemental Awakening_55,Sunbloss,Stage 2,Celestial,,,70,92,45,77,Leaf Tickle,17,1,,,Nature's Clap,0,2,Speed,40%,Clarity Aura,46,6,,,Fairy Shatter,67,10,,
+Elemental Awakening_56,Aloebud,Stage 1,Celestial,3,Aloeflora,65,56,54,50,Aloe Slash,18,1,,,Vera Tackle,47,3,,,,,,,,,,,,
+Elemental Awakening_57,Aloeflora,Stage 2,Celestial,,Aloetide,75,58,62,56,Aloe Slash,18,1,,,Vera Tackle,47,3,,,Healing Sap,0,7,Speed,40%,,,,,
+Elemental Awakening_58,Aloetide,Stage 3,Celestial,,,92,90,63,87,Aloe Slash,27,1,,,Vera Tackle,47,3,,,Healing Sap,0,7,Speed,40%,Scented Lotion,68,8,,
+Elemental Awakening_59,Floretta,Stage 1,Celestial,3,Lizaflora,66,64,45,56,Minor Mend,25,1,,,Major Mend,40,3,,,Sparkle Rend,69,7,,,,,,,
+Elemental Awakening_60,Lizaflora,Stage 2,Celestial,,,77,80,65,78,Minor Mend,25,1,,,Major Mend,40,3,,,Sparkle Rend,69,7,,,Gleamwave,0,10,Attack,40%
+Elemental Awakening_61,Astromelon,Stage 1,Celestial,1,Lunamelon,76,34,40,59,Nebula Kiss,26,1,,,Moonlight Slam,51,3,,,Planet Burst,62,5,,,,,,,
+Elemental Awakening_62,Lunamelon,Stage 2,Celestial,,Orbitmelon,76,55,68,69,Nebula Kiss,26,1,,,Moonlight Slam,51,3,,,Planet Burst,62,5,,,,,,,
+Elemental Awakening_63,Orbitmelon,Stage 3,Celestial,,,76,65,87,89,Nebula Kiss,26,1,,,Moonlight Slam,51,3,,,Planet Burst,62,5,,,Juicy Slam,0,8,Speed,45%
+Elemental Awakening_64,Voltveil,Stage 1,Mechanic,3,,80,80,80,50,Iron Spin,22,1,,,Steel Crush,42,4,,,Alloy Strike,64,7,,,Gear Smash,0,9,Defence,40%
+Elemental Awakening_65,Byteblade,Stage 1,Mechanic,4,,100,45,150,40,Shadow Byte,30,1,,,Iron Spike,48,2,,,Wrench Strike,59,5,,,Bolt Cutter,0,9,Attack,40%
+Elemental Awakening_66,Venomgear,Stage 1,Mechanic,2,Toxiforge,50,55,60,30,Toxic Toss,21,1,,,Veno Slash,0,4,Defence,40%,,,,,,,,,,
+Elemental Awakening_67,Toxiforge,Stage 2,Mechanic,,,86,95,88,31,Toxic Toss,21,1,,,Veno Slash,0,4,Defence,40%,Quick Reflexes,53,6,,,Gearburst,62,9,,
+Elemental Awakening_68,Envoye,Stage 1,Mechanic,5,,73,100,129,50,Forceful Flip,37,1,,,Scrap Strike,46,4,,,Cog Snap,0,6,Defence,45%,Rivet Slam,82,8,,
+Elemental Awakening_69,Struto,Stage 1,Mechanic,2,Strutalon,50,46,80,55,Metallic Wing,18,1,,,Turbo Charge,50,3,,,,,,,,,,,,
+Elemental Awakening_70,Strutalon,Stage 2,Mechanic,,,59,78,86,78,Metallic Wing,18,1,,,Turbo Charge,50,3,,,Hard as Steel,0,6,Speed,40%,Aerodrive,65,8,,
+Elemental Awakening_71,Ponimetal,Stage 1,Mechanic,1,Equinix,55,55,55,60,Iron Whip,31,1,,,Titan Kick,41,2,,,Metal Burst,63,6,,,,,,,
+Elemental Awakening_72,Equinix,Stage 2,Mechanic,,Equinox,66,66,66,65,Iron Whip,31,1,,,Titan Kick,41,2,,,Metal Burst,63,6,,,Aura of Strenght,0,9,Attack,45%
+Elemental Awakening_73,Equinox,Stage 3,Mechanic,,,91,77,77,75,Iron Whip,31,1,,,Titan Kick,41,2,,,Metal Burst,63,6,,,Aura of Strenght,0,9,Attack,45%
+Elemental Awakening_74,Metamonk,Stage 1,Mechanic,4,,116,39,126,53,Monastic Strike,35,1,,,Monk's Fury,51,3,,,Clamp Crush,60,6,,,Soft as Rock,0,8,Defence,40%
+Elemental Awakening_75,Aeglet,Stage 1,Mechanic,3,Aegiscelis,60,60,60,20,Metalic Buzz,26,1,,,Guardian Glow,44,2,,,Torque Rend,62,6,,,,,,,
+Elemental Awakening_76,Aegiscelis,Stage 2,Mechanic,,,40,90,100,68,Metalic Buzz,26,1,,,Guardian Glow,44,2,,,Torque Rend,62,6,,,Drill Twist,0,8,Attack,40%
+Elemental Awakening_77,Ghoulpole,Stage 1,Mechanic,1,Apparitron,60,20,70,45,Soul Snare,24,1,,,Eerie Attraction,51,2,,,,,,,,,,,,
+Elemental Awakening_78,Apparitron,Stage 2,Mechanic,,Poltergnet,70,37,73,50,Soul Snare,24,1,,,Eerie Attraction,51,2,,,Iron Blast,0,6,Defence,40%,,,,,
+Elemental Awakening_79,Poltergnet,Stage 3,Mechanic,,,99,60,99,55,Soul Snare,24,1,,,Eerie Attraction,51,2,,,Iron Blast,0,6,Defence,40%,Spectral Burst,63,10,,
