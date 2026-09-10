@@ -313,7 +313,7 @@ export class Renderer {
 
       switch (c.meta?.role) {
         case 'bumper': this._bumper(ctx, c, lit); break;
-        case 'bankTarget': this._bankTarget(ctx, c, lit); break;
+        case 'bankTarget': this._bankTarget(ctx, c, lit, !!view?.shardMode); break;
         case 'topLane': this._lane(ctx, c, lit, view?.litLetters?.lanes?.[c.meta.index]); break;
         case 'spinner': this._spinner(ctx, c, lit); break;
         case 'saucer': this._saucer(ctx, c, lit); break;
@@ -386,12 +386,22 @@ export class Renderer {
     ctx.restore();
   }
 
-  /** A drop target: a lettered plate, sunk into the playfield when down. */
-  _bankTarget(ctx, c, lit) {
+  /**
+   * A drop target: a lettered plate, sunk into the playfield when down.
+   *
+   * `shardMode` repaints the whole bank while Evolution Mode is running,
+   * because during it these are shard targets rather than the CATCH bank. They
+   * are the same five colliders either way, so without a visual change there is
+   * nothing on the table telling the player what to shoot — which read as
+   * "there are no shards".
+   */
+  _bankTarget(ctx, c, lit, shardMode = false) {
     const mx = (c.a.x + c.b.x) / 2;
     const my = (c.a.y + c.b.y) / 2;
     const angle = Math.atan2(c.b.y - c.a.y, c.b.x - c.a.x);
     const len = Math.hypot(c.b.x - c.a.x, c.b.y - c.a.y);
+
+    const SHARD = '#ffe680';
 
     ctx.save();
     ctx.translate(mx, my);
@@ -399,25 +409,34 @@ export class Renderer {
 
     const h = c.thick * 2;
     if (c.active) {
-      ctx.fillStyle = lit ? '#ffffff' : this.mode.colour;
+      ctx.fillStyle = lit ? '#ffffff' : (shardMode ? SHARD : this.mode.colour);
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     } else {
       ctx.fillStyle = 'rgba(255,255,255,0.07)';
       ctx.strokeStyle = 'rgba(255,255,255,0.10)';
     }
 
+    // A glow, so a shard target reads as live from across the table.
+    if (c.active && shardMode && this.effects) {
+      ctx.shadowColor = SHARD;
+      ctx.shadowBlur = 6;
+    }
+
     ctx.beginPath();
     ctx.roundRect(-len / 2, -h / 2, len, h, 0.9);
     ctx.fill();
+    ctx.shadowBlur = 0;
     ctx.lineWidth = 0.3;
     ctx.stroke();
 
-    if (c.active && c.meta?.letter) {
+    if (c.active) {
       ctx.fillStyle = this.mode.ink;
       ctx.font = `bold ${h * 1.25}px ui-monospace, monospace`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(c.meta.letter, 0, 0.1);
+      // A diamond in shard mode instead of its CATCH letter: the letter is
+      // actively misleading while the bank means something else.
+      ctx.fillText(shardMode ? '\u25c6' : (c.meta?.letter || ''), 0, 0.1);
     }
 
     ctx.restore();

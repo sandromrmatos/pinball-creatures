@@ -155,11 +155,30 @@ const sheetStack = [];
  * to callers is how the capture reveal came to sit over a live table and cost
  * people the ball they had just caught something with.
  */
+/**
+ * Confirm dialogs are counted separately from sheets.
+ *
+ * confirmSheet builds its own markup rather than going through openSheet, so it
+ * never appears in `sheetStack`. Deriving `any` from the stack alone therefore
+ * reported "nothing is open" while a confirm was on screen — so a confirm did
+ * not pause the game, and closing one *resumed* a game that a sheet underneath
+ * it had legitimately paused.
+ */
+let modalCount = 0;
+
 function announceSheets(id, open) {
   window.dispatchEvent(new CustomEvent('sheetchange', {
-    detail: { id, open, depth: sheetStack.length, any: sheetStack.length > 0 }
+    detail: {
+      id,
+      open,
+      depth: sheetStack.length,
+      any: sheetStack.length + modalCount > 0
+    }
   }));
 }
+
+/** True while anything at all is covering the screen. */
+export const anythingOpen = () => sheetStack.length + modalCount > 0;
 
 export function openSheet(id) {
   const node = $(`#${id}`);
@@ -176,7 +195,9 @@ export function closeSheet(id) {
   node.classList.add('hidden');
   const idx = sheetStack.indexOf(node.id);
   if (idx !== -1) sheetStack.splice(idx, 1);
-  if (!sheetStack.length) document.body.classList.remove('sheet-open');
+  // Symmetrical with confirmSheet: a confirm can outlive the sheet it was
+  // raised from, so the backdrop class must survive until nothing is left.
+  if (!anythingOpen()) document.body.classList.remove('sheet-open');
   announceSheets(node.id, false);
 }
 
@@ -243,7 +264,10 @@ export function confirmSheet({ title, body, confirm = 'OK', cancel = 'Cancel', d
   return new Promise(resolve => {
     const done = value => {
       wrap.remove();
-      document.body.classList.remove('sheet-open');
+      modalCount = Math.max(0, modalCount - 1);
+      // Only clear the class if nothing is left underneath: a confirm can be
+      // raised on top of a real sheet.
+      if (!anythingOpen()) document.body.classList.remove('sheet-open');
       // Same announcement as a real sheet: this covers the screen too, and it
       // can be raised mid-ball.
       announceSheets('confirm', false);
@@ -263,6 +287,7 @@ export function confirmSheet({ title, body, confirm = 'OK', cancel = 'Cancel', d
     );
 
     document.body.append(wrap);
+    modalCount++;
     document.body.classList.add('sheet-open');
     announceSheets('confirm', true);
   });

@@ -174,16 +174,19 @@ async function run() {
       'hud-sub-time', 'hud-sub-bar', 'hud-save', 'hud-tilt',
       'hud-kb-left', 'hud-kb-right',
       'collection-body', 'scores-body', 'profile-body',
+      'screen-guide', 'guide-body',
       'sheet-mode', 'mode-body', 'sheet-species', 'species-body',
       'sheet-shift', 'shift-body', 'sheet-reveal', 'reveal-body',
-      'sheet-gameover', 'gameover-body', 'sheet-help', 'help-body',
-      'toasts', 'btn-help', 'btn-modes'
+      'sheet-gameover', 'gameover-body',
+      'toasts', 'btn-modes'
     ];
     const missing = ids.filter(id => !doc.getElementById(id));
     check(`all ${ids.length} expected elements exist`, missing.length === 0, missing.join(', '));
 
-    check('there are four nav buttons', doc.querySelectorAll('.nav-btn').length === 4,
+    check('there are five nav buttons', doc.querySelectorAll('.nav-btn').length === 5,
           String(doc.querySelectorAll('.nav-btn').length));
+    check('the guide is one of them', !!doc.querySelector('.nav-btn[data-screen="guide"]'));
+    check('no help button is left over the playfield', !doc.getElementById('btn-help'));
     check('both flipper buttons exist', doc.querySelectorAll('[data-flip]').length === 2);
     check('the stylesheet applied', win.getComputedStyle(doc.body).overflowY === 'hidden',
           win.getComputedStyle(doc.body).overflowY);
@@ -295,7 +298,7 @@ async function run() {
      ===================================================== */
   group('screens');
   {
-    for (const name of ['collection', 'scores', 'profile', 'table']) {
+    for (const name of ['collection', 'scores', 'profile', 'guide', 'table']) {
       const btn = doc.querySelector(`.nav-btn[data-screen="${name}"]`);
       btn.click();
       await wait(280);
@@ -346,27 +349,20 @@ async function run() {
     check('no errors from the Collection', errors.length === 0, errors.slice(0, 3).join(' | '));
   }
 
-  group('help and the full guide');
+  group('the guide screen');
   {
-    doc.querySelector('.nav-btn[data-screen="table"]').click();
-    await wait(200);
-
-    doc.getElementById('btn-help').click();
-    await wait(300);
-    check('help opens', !doc.getElementById('sheet-help').classList.contains('hidden'));
-    check('help has rules', doc.querySelectorAll('#help-body .rule').length > 5,
-          String(doc.querySelectorAll('#help-body .rule').length));
-
-    const guideBtn = [...doc.querySelectorAll('#help-body .btn')]
-      .find(b => (b.textContent || '').toLowerCase().includes('guide'));
-    check('there is a button through to the full guide', !!guideBtn,
-          guideBtn?.textContent || '');
-
-    guideBtn?.click();
+    /**
+     * Reached from the bottom bar, not from a button over the playfield. The
+     * old "?" sat inside #table-wrap, whose touch handler called
+     * preventDefault() on every touch — so on a phone it flipped the flippers
+     * and the button never got its click.
+     */
+    doc.querySelector('.nav-btn[data-screen="guide"]').click();
     await wait(350);
 
-    const guide = doc.getElementById('sheet-guide');
-    check('the full guide opens', !guide.classList.contains('hidden'));
+    check('the guide screen opens', doc.getElementById('screen-guide').classList.contains('active'));
+    check('it carries the quick rules too', doc.querySelectorAll('#guide-body .rule').length > 5,
+          String(doc.querySelectorAll('#guide-body .rule').length));
 
     const sections = doc.querySelectorAll('#guide-body .g-section');
     check('the guide is split into sections', sections.length >= 10, `${sections.length} sections`);
@@ -397,12 +393,56 @@ async function run() {
     await wait(150);
     check('a section can be opened', first.open === true);
 
-    doc.querySelector('#sheet-guide .sheet-close').click();
-    await wait(200);
-    check('the guide closes', guide.classList.contains('hidden'));
-    doc.querySelector('#sheet-help .sheet-close').click();
-    await wait(200);
+    doc.querySelector('.nav-btn[data-screen="table"]').click();
+    await wait(250);
+    check('and the table comes back', doc.getElementById('screen-table').classList.contains('active'));
     check('no errors from the guide', errors.length === 0, errors.slice(0, 3).join(' | '));
+  }
+
+  group('HUD buttons are tappable over the playfield');
+  {
+    /**
+     * The bug: #table-wrap's touch handler called preventDefault() on every
+     * touch inside it, including touches on the HUD's own buttons, so on a
+     * phone tapping one flipped the flippers instead. Only "change table" is
+     * left up there now, and it has to work.
+     */
+    doc.querySelector('.nav-btn[data-screen="table"]').click();
+    await wait(200);
+
+    const btn = doc.getElementById('btn-modes');
+    const r = btn.getBoundingClientRect();
+    check('the change-table button has a real hit area', r.width >= 28 && r.height >= 28,
+          `${r.width.toFixed(0)}x${r.height.toFixed(0)}`);
+
+    // A synthetic touch, which is what a phone sends.
+    const touch = new win.Touch({
+      identifier: 1, target: btn,
+      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2
+    });
+    const ev = new win.TouchEvent('touchstart', {
+      touches: [touch], targetTouches: [touch], changedTouches: [touch],
+      bubbles: true, cancelable: true
+    });
+    btn.dispatchEvent(ev);
+    await wait(80);
+    check('a touch on it is not swallowed by the table', ev.defaultPrevented === false);
+
+    // Mid-game it asks before abandoning, rather than jumping straight to the
+    // picker — the score and anything caught this game would be lost.
+    btn.click();
+    await wait(450);
+    check('it asks before abandoning a game', !!doc.querySelector('.modal'));
+
+    const cancel = [...doc.querySelectorAll('.modal .btn')].find(b => /cancel/i.test(b.textContent || ''));
+    check('the prompt offers a way out', !!cancel, cancel?.textContent || '');
+    cancel?.click();
+    await wait(350);
+
+    check('declining leaves the game running',
+          !doc.getElementById('hud').classList.contains('hidden') &&
+          doc.getElementById('sheet-mode').classList.contains('hidden'));
+    check('no errors from the HUD buttons', errors.length === 0, errors.slice(0, 3).join(' | '));
   }
 
   group('a sheet freezes the table');
@@ -418,6 +458,10 @@ async function run() {
      */
     doc.querySelector('.nav-btn[data-screen="table"]').click();
     await wait(250);
+    if (!doc.getElementById('sheet-mode').classList.contains('hidden')) {
+      doc.querySelector('#mode-body .mode-card')?.click();
+      await wait(400);
+    }
 
     const canvas = doc.getElementById('table');
     const snap = () => {
@@ -447,29 +491,42 @@ async function run() {
     const moveB = snap();
     check('the table animates while playing', moveA !== moveB, `${moveA} vs ${moveB}`);
 
-    // Now cover it.
-    doc.getElementById('btn-help').click();
-    await wait(400);
+    /* Cover it with the "leave this game?" confirm, raised by the change-table
+       button. A confirm is worth testing specifically: it is built by hand
+       rather than through openSheet, so it needs its own announcement to pause
+       the game, and it is the one most likely to be missed. */
+    const openConfirm = async () => {
+      doc.getElementById('btn-modes').click();
+      await wait(450);
+      return [...doc.querySelectorAll('.modal .btn')];
+    };
+    const dismiss = async btns => {
+      const cancel = btns.find(b => /cancel|keep|no/i.test(b.textContent || '')) || btns[0];
+      cancel?.click();
+      await wait(400);
+    };
+
+    let btns = await openConfirm();
+    check('a confirm dialog appeared over the table', btns.length >= 1, `${btns.length} buttons`);
+
     const pausedA = snap();
     await wait(700);
     const pausedB = snap();
-    check('the table freezes while a sheet is open', pausedA === pausedB,
+    check('the table freezes while a dialog is open', pausedA === pausedB,
           `${pausedA} vs ${pausedB}`);
 
-    doc.querySelector('#sheet-help .sheet-close').click();
-    await wait(400);
+    await dismiss(btns);
     const afterA = snap();
     await wait(320);
     const afterB = snap();
-    check('and it starts again when the sheet closes', afterA !== afterB,
+    check('and it starts again when the dialog closes', afterA !== afterB,
           `${afterA} vs ${afterB}`);
 
-    // A long read must not cost the ball.
+    // A long read must not cost the ball — the bug that started all this.
     const ballBefore = doc.getElementById('hud-balls').textContent;
-    doc.getElementById('btn-help').click();
+    btns = await openConfirm();
     await wait(2600);
-    doc.querySelector('#sheet-help .sheet-close').click();
-    await wait(300);
+    await dismiss(btns);
     check('a long read does not cost a ball',
           doc.getElementById('hud-balls').textContent === ballBefore,
           `${JSON.stringify(ballBefore)} -> ${JSON.stringify(doc.getElementById('hud-balls').textContent)}`);

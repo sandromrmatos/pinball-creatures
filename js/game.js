@@ -729,7 +729,21 @@ export class Game {
 
   _enterSaucer(ball) {
     if (this.phase === PHASE.SAUCER || ball.held) return;
-    if (this.phase === PHASE.ENCOUNTER || this.phase === PHASE.BOSS) return;
+
+    /**
+     * While a mode owns the ball the Well is inert.
+     *
+     * Guarded on `this.sub` rather than by listing phases, which is how this
+     * broke: the list read ENCOUNTER and BOSS and quietly omitted EVOLUTION.
+     * Dropping into the Well mid-evolution re-entered the saucer, found nothing
+     * armed, and kicked the ball out with the default phase of PLAY — leaving
+     * the evolution state live but never updated again. The creature froze, the
+     * clock froze, hits stopped counting, and its collider was orphaned in the
+     * world for the rest of the game.
+     *
+     * Keyed off the sub-mode itself, a fourth mode cannot reintroduce it.
+     */
+    if (this.sub) return;
 
     // A ball back in the Well this quickly did not really get away, so the next
     // ejection leaves at a wider angle. Anything slower is an ordinary shot and
@@ -1500,6 +1514,12 @@ export class Game {
         bank: this.run?.bank ?? [],
         lanes: this.run?.lanes ?? []
       },
+      /**
+       * During Evolution Mode the drop target bank is the shard bank. It has to
+       * look different, or there is nothing on the table to tell you what to
+       * shoot — the targets are identical to the ones that spell CATCH.
+       */
+      shardMode: s?.kind === 'evolution',
       encounter: s ? {
         sprite: s.shiny ? (s.sp || s.from).shinyPath : (s.sp || s.from).imagePath,
         shiny: s.shiny,

@@ -736,21 +736,15 @@ const RULES = [
   ['The Collection', 'Everything you register is kept forever. Scores and creatures caught in a game are not \u2014 only the Collection carries over.']
 ];
 
-export function renderHelp() {
-  const body = $('#help-body');
-  if (!body) return;
-  fill(body,
+/** The short version, shown at the top of the guide screen. */
+function quickRules() {
+  return el('div', { class: 'card' },
+    el('h4', { text: 'The basics' }),
     el('div', { class: 'rules' },
       RULES.map(([term, text]) => el('div', { class: 'rule' },
         el('b', { text: term }),
         el('span', { class: 'muted small', text })
       ))
-    ),
-    el('div', { class: 'btn-row' },
-      el('button', {
-        class: 'btn primary wide', type: 'button', text: 'Full guide \u2014 every detail',
-        onclick: () => { renderGuide(); openSheet('sheet-guide'); }
-      })
     )
   );
 }
@@ -818,7 +812,10 @@ export function renderGuide() {
   });
 
   fill(body,
-    para('Everything the game does, in order of when you will meet it. Tap a heading to open it.'),
+    quickRules(),
+
+    el('h4', { class: 'g-heading', text: 'Everything, in detail' }),
+    para('In roughly the order you will meet it. Tap a heading to open it.'),
 
     /* ============ CONTROLS ============ */
     section('Controls',

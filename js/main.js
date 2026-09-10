@@ -24,7 +24,7 @@ import {
 } from './ui.js';
 import {
   renderCollection, renderScores, renderProfile, renderModePicker,
-  renderShiftOffer, renderReveal, renderGameOver, renderHelp, openSpecies
+  renderShiftOffer, renderReveal, renderGameOver, renderGuide, openSpecies
 } from './views.js';
 
 /* ---------------------------------------------------------------
@@ -86,7 +86,7 @@ async function main() {
   renderCollection();
   renderScores();
   renderProfile();
-  renderHelp();
+  renderGuide();
   renderModePicker(type => startGame(type));
 
   /* ---- show the app ---- */
@@ -153,7 +153,17 @@ function updateHud() {
   $('#hud-disc').style.color = h.disc.colour;
 
   /* ---- CATCH and lane letters ---- */
-  paintLetters('#hud-bank', 'CATCH', h.bank);
+  // During Evolution Mode the bank collects shards, so showing CATCH there is
+  // worse than showing nothing: it tells the player to do the wrong thing.
+  const shardMode = h.sub?.kind === 'evolution';
+  if (shardMode) {
+    const have = h.sub.shards;
+    paintLetters('#hud-bank', '\u25c6'.repeat(h.sub.shardsNeeded),
+                 Array.from({ length: h.sub.shardsNeeded }, (_, i) => i < have));
+  } else {
+    paintLetters('#hud-bank', 'CATCH', h.bank);
+  }
+  $('#hud-bank').classList.toggle('shards', shardMode);
   paintLetters('#hud-lanes', 'ABC', h.lanes);
 
   /* ---- what is armed ---- */
@@ -205,8 +215,13 @@ function updateHud() {
 function paintLetters(sel, letters, lit) {
   const host = $(sel);
   if (!host) return;
-  if (host.childElementCount !== letters.length) {
-    fill(host, [...letters].map(ch => el('span', { class: 'letter', text: ch })));
+  const chars = [...letters];
+  // Rebuilt when the count OR the glyphs change: the bank switches between
+  // CATCH and three shard diamonds, and both are five-then-three characters,
+  // so counting alone would leave the old letters in place.
+  const current = [...host.children].map(n => n.textContent).join('');
+  if (host.childElementCount !== chars.length || current !== letters) {
+    fill(host, chars.map(ch => el('span', { class: 'letter', text: ch })));
   }
   [...host.children].forEach((node, i) => node.classList.toggle('on', !!lit[i]));
 }
@@ -259,6 +274,18 @@ function handleGameEvent(type, p) {
       buzz(24);
       break;
 
+    case 'evolutionStart':
+      // Spelling out the two steps, because the mode reuses the drop target
+      // bank and nothing else on the table explains that.
+      toast(`Evolving ${p.from.name}: knock ${p.needed} targets, then hit it.`,
+            { kind: 'good', ms: 4200 });
+      break;
+
+    case 'evolutionReady':
+      toast('Shards ready \u2014 now hit the creature!', { kind: 'good', ms: 3200 });
+      buzz(20);
+      break;
+
     case 'extraBall':
       toast('Extra ball!', { kind: 'good', ms: 3000 });
       buzz([24, 50, 24]);
@@ -302,6 +329,7 @@ function handleGameEvent(type, p) {
         onAgain: t => startGame(t),
         onModes: () => { renderModePicker(t => startGame(t)); openSheet('sheet-mode'); }
       });
+      renderGuide();      // the pool counts and boss names it quotes have moved on
       break;
 
     default:
@@ -342,10 +370,9 @@ function wireNav() {
       if (name === 'collection') renderCollection();
       if (name === 'scores') renderScores();
       if (name === 'profile') renderProfile();
+      if (name === 'guide') renderGuide();
     });
   }
-
-  $('#btn-help')?.addEventListener('click', () => { renderHelp(); openSheet('sheet-help'); });
 
   $('#btn-modes')?.addEventListener('click', async () => {
     if (game.run && game.phase !== PHASE.GAME_OVER) {
@@ -438,6 +465,20 @@ function wireTableInput() {
     return (left !== swap) ? 'left' : 'right';
   };
 
+  /**
+   * Is this touch on a control rather than on the playfield?
+   *
+   * The HUD sits inside #table-wrap, so a tap on one of its buttons also
+   * reaches this handler — which flipped, plunged, and called preventDefault(),
+   * killing the click before the button ever saw it. The buttons were
+   * effectively untappable on a touchscreen.
+   *
+   * The on-screen flipper buttons are matched too; they have their own
+   * listeners, so letting this handler also fire would flip twice.
+   */
+  const onControl = target =>
+    !!(target instanceof Element) && !!target.closest('button, a, input, select, [data-flip]');
+
   const down = (id, x, y) => {
     audio.unlock();
     if (!game.run) return;
@@ -480,6 +521,7 @@ function wireTableInput() {
 
   /* ---- touch ---- */
   surface.addEventListener('touchstart', e => {
+    if (onControl(e.target)) return;      // let the button have it
     e.preventDefault();
     for (const t of e.changedTouches) down(t.identifier, t.clientX, t.clientY);
   }, { passive: false });
@@ -495,7 +537,11 @@ function wireTableInput() {
   surface.addEventListener('touchcancel', endTouch, { passive: true });
 
   /* ---- mouse, for desktop ---- */
-  surface.addEventListener('mousedown', e => { e.preventDefault(); down('mouse', e.clientX, e.clientY); });
+  surface.addEventListener('mousedown', e => {
+    if (onControl(e.target)) return;
+    e.preventDefault();
+    down('mouse', e.clientX, e.clientY);
+  });
   window.addEventListener('mousemove', e => move('mouse', e.clientX, e.clientY));
   window.addEventListener('mouseup', () => up('mouse'));
 

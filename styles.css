@@ -151,7 +151,7 @@ body { user-select: none; }
   height: calc(var(--nav-h) + var(--safe-b));
   padding-bottom: var(--safe-b);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: #0d1330;
   border-top: 1px solid var(--line);
 }
@@ -159,7 +159,7 @@ body { user-select: none; }
   border: 0;
   background: none;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -239,6 +239,11 @@ body { user-select: none; }
 }
 .letter.on { background: var(--accent); border-color: var(--accent); color: #0b1024; }
 .letters.lanes .letter { border-radius: 50%; }
+
+/* Shard mode: the bank means something else during Evolution Mode, so it is
+   coloured to match the shard targets on the table rather than the CATCH bank. */
+.letters.shards .letter { border-color: var(--r5); color: var(--r5); }
+.letters.shards .letter.on { background: var(--r5); border-color: var(--r5); color: #241c00; }
 
 .armed {
   align-self: flex-start;
@@ -706,6 +711,7 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
 /* ---- full guide ---- */
 
 .g-p { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+.g-heading { margin: 16px 0 6px; font-size: 14px; }
 
 .g-section {
   border: 1px solid var(--line);

@@ -47,11 +47,13 @@
                 <span id="hud-disc" class="chip disc">Disc</span>
               </div>
             </div>
+            <!-- Change table is the only button left over the playfield. The
+                 guide moved to the bottom bar: a small target at the top of a
+                 pinball table competes with the flippers for every tap. -->
             <div class="hud-right">
               <span id="hud-ball" class="muted small">Ball 1</span>
               <span id="hud-balls" class="balls">●●●</span>
               <button id="btn-modes" class="hud-btn" type="button" title="Change table">☰</button>
-              <button id="btn-help" class="hud-btn" type="button" title="How to play">?</button>
             </div>
           </div>
 
@@ -104,6 +106,12 @@
       <div id="profile-body" class="screen-body"></div>
     </section>
 
+    <!-- GUIDE -->
+    <section class="screen" id="screen-guide">
+      <div class="screen-head"><h2>How to play</h2></div>
+      <div id="guide-body" class="screen-body"></div>
+    </section>
+
   </main>
 
   <!-- ---- NAV ---- -->
@@ -112,6 +120,7 @@
     <button class="nav-btn" data-screen="collection" type="button"><span>▦</span>Collection</button>
     <button class="nav-btn" data-screen="scores" type="button"><span>★</span>Scores</button>
     <button class="nav-btn" data-screen="profile" type="button"><span>☰</span>Profile</button>
+    <button class="nav-btn" data-screen="guide" type="button"><span>?</span>Guide</button>
   </nav>
 </div>
 
@@ -159,23 +168,9 @@
   </div>
 </div>
 
-<div id="sheet-help" class="sheet-wrap hidden">
-  <div class="sheet-backdrop" data-close="sheet-help"></div>
-  <div class="sheet">
-    <button class="sheet-close" data-close="sheet-help" type="button">✕</button>
-    <h3>How to play</h3>
-    <div id="help-body"></div>
-  </div>
-</div>
-
-<div id="sheet-guide" class="sheet-wrap hidden">
-  <div class="sheet-backdrop" data-close="sheet-guide"></div>
-  <div class="sheet">
-    <button class="sheet-close" data-close="sheet-guide" type="button">✕</button>
-    <h3>Full guide</h3>
-    <div id="guide-body"></div>
-  </div>
-</div>
+<!-- The guide is a screen in the bottom bar, not a sheet. It is long enough to
+     want a scrolling screen, and a sheet raised from over the playfield was
+     unreachable on a touchscreen. -->
 
 <div id="toasts" class="toasts"></div>
 

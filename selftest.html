@@ -1409,6 +1409,100 @@ async function run() {
     check('a final form is not evolvable', g._evolvable().length === 0);
   }
 
+  group('game: a mode owns the ball, so the Well is inert');
+  {
+    /**
+     * The regression test for a bug that made Evolution Mode look broken.
+     *
+     * The Well's entry guard listed ENCOUNTER and BOSS and omitted EVOLUTION.
+     * Dropping into the Well mid-evolution re-entered the saucer, found nothing
+     * armed, and kicked the ball out with the default phase of PLAY — leaving
+     * the evolution state live but never updated again. The creature stopped
+     * moving, the clock stopped, hits stopped counting, and its collider was
+     * left in the world for the rest of the game.
+     *
+     * Checked for all three modes, since any one of them could be missed.
+     */
+    const cases = [
+      ['encounter', g2 => { g2.run.encounterArmed = true; }, PHASE.ENCOUNTER],
+      ['evolution', g2 => {
+        g2.run.caught.push({ uid: 'r1', speciesId: speciesByName('Meditot').id, shiny: false });
+        g2.run.evolutionArmed = true;
+      }, PHASE.EVOLUTION],
+      ['boss', g2 => { g2.run.gateArmed = true; }, PHASE.BOSS]
+    ];
+
+    for (const [label, arm, expected] of cases) {
+      await store.startFresh();
+      const g2 = new Game({});
+      g2.start('Mystic');
+      g2.plungeRelease();
+      arm(g2);
+
+      g2._enterSaucer(g2.ball);
+      g2._lastNow = 900000;
+      g2._updateSaucer(900000);
+      check(`${label} mode starts`, g2.phase === expected, g2.phase);
+
+      const sub = g2.sub;
+      const secondsBefore = sub.seconds;
+
+      // Drop it straight back into the Well.
+      g2.ball.held = false;
+      g2.ball.moveTo(LAYOUT.saucer.x, LAYOUT.saucer.y);
+      g2._enterSaucer(g2.ball);
+
+      check(`  the Well ignores it during ${label}`, g2.phase === expected, g2.phase);
+      check(`  the ball is not swallowed`, g2.ball.held === false);
+      check(`  the mode is still live`, g2.sub === sub);
+
+      // And it must still be running: clock ticking, hits landing.
+      for (let i = 0; i < 30; i++) {
+        if (expected === PHASE.ENCOUNTER) g2._updateEncounter(0.016);
+        else if (expected === PHASE.EVOLUTION) g2._updateEvolution(0.016);
+        else g2._updateBoss(0.016);
+      }
+      check(`  the ${label} clock is still running`, g2.sub.seconds < secondsBefore,
+            `${secondsBefore.toFixed(2)} -> ${g2.sub.seconds.toFixed(2)}`);
+
+      const moved = g2.sub.x !== LAYOUT.centre || g2.sub.y !== (expected === PHASE.BOSS ? 78 : 84);
+      check(`  the ${label} creature is still moving`, moved);
+    }
+  }
+
+  group('game: Evolution Mode signals the shard bank');
+  {
+    await store.startFresh();
+    const g2 = new Game({});
+    g2.start('Mystic');
+    g2.plungeRelease();
+    g2.run.caught.push({ uid: 'r1', speciesId: speciesByName('Meditot').id, shiny: false });
+    g2.run.evolutionArmed = true;
+
+    check('the bank is not in shard mode normally', g2.view().shardMode === false);
+
+    g2._enterSaucer(g2.ball);
+    g2._lastNow = 950000;
+    g2._updateSaucer(950000);
+
+    check('the view flags shard mode', g2.view().shardMode === true);
+    check('the HUD reports how many are needed',
+          g2.hud().sub.shardsNeeded === EVOLUTION_SHARDS, String(g2.hud().sub.shardsNeeded));
+    check('and how many are collected', g2.hud().sub.shards === 0);
+    check('the bank is standing, ready to be knocked down',
+          g2.parts.bank.every(t => t.active));
+
+    g2._hitBankTarget(g2.parts.bank[0]);
+    check('knocking one collects a shard', g2.hud().sub.shards === 1);
+
+    // Once the mode ends, the bank goes back to meaning CATCH.
+    g2.sub.shards = EVOLUTION_SHARDS;
+    g2.ball.moveTo(g2.sub.x, g2.sub.y);
+    g2._updateEvolution(0.016);
+    check('the mode ended', g2.sub === null);
+    check('shard mode is off again', g2.view().shardMode === false);
+  }
+
   group('game: a three-stage line can be taken all the way in one game');
   {
     await store.startFresh();
