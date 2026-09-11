@@ -20,11 +20,13 @@
 
 import {
   MODES, TYPES, SCORE, DISC_TIERS, MAX_DISC_TIER, MAX_MULTIPLIER,
-  BALLS_PER_GAME, BALL_SAVE_SECONDS, EXTRA_BALL_AT, GATE_CATCHES_NEEDED,
+  BALLS_PER_GAME, BALL_SAVE_SECONDS, CAPTURE_BALL_SAVE_SECONDS,
+  EXTRA_BALL_AT, GATE_CATCHES_NEEDED,
   CAPTURE_METER, CAPTURE_SECONDS, CAPTURE_DRIFT,
   EVOLUTION_SHARDS, EVOLUTION_SECONDS,
   BOSS_SECONDS, BOSS_SHIELD_SECONDS,
-  SHINY_ODDS, rollEncounter, bossOf, speciesById, evolutionTargets,
+  SHINY_ODDS, SHINY_DOUBLE_AT,
+  rollEncounter, bossOf, speciesById, evolutionTargets,
   chance, clamp, pick, randRange
 } from './data.js';
 
@@ -169,6 +171,12 @@ export class Game {
     this._penBox = null;
     this._penSince = 0;
     this._searches = 0;
+
+    /**
+     * Contacts with the creature, filled by the solver and drained by whichever
+     * mode is running. See _creatureContacts for why it is a queue.
+     */
+    this._creatureHits = [];
   }
 
   /* ---------------------------------------------------------------
@@ -333,7 +341,10 @@ export class Game {
 
     const was = f.up;
     f.up = !!down;
-    if (down && !was) this._sound('flipper', { side });
+    if (down && !was) {
+      this._sound('flipper', { side });
+      this._laneChange(side === 'right' ? 1 : -1);
+    }
   }
 
   /** A sideways shove. Too many in quick succession tilts the table. */
@@ -533,6 +544,16 @@ export class Game {
           this._hitGimmick(c);
           break;
 
+        /**
+         * The creature. Queued rather than acted on, because what a contact is
+         * worth depends on the mode and only the mode knows: damage in an
+         * encounter, a shard check in an evolution, a shield test on a boss.
+         * Drained a few lines later by _creatureContacts.
+         */
+        case 'creature':
+          if (this.sub) this._creatureHits.push({ x: ev.ball.pos.x, y: ev.ball.pos.y });
+          break;
+
         default:
           break;
       }
@@ -548,6 +569,38 @@ export class Game {
    * settling on top of one: a standing target the ball can rest against
    * stops being there the moment they touch.
    */
+  /**
+   * Lane change. A flipper press slides the lit pattern one place sideways.
+   *
+   * The classic pinball courtesy, applied to both rows: the right flipper
+   * shifts everything one to the right and the left flipper one to the left,
+   * wrapping around the ends. If the only lane you still need is C and the ball
+   * is heading for B, press right and B becomes the one you need.
+   *
+   * The pattern moves, not the lit set — so a single lit B pressed right leaves
+   * a single lit C, and a CATCH bank missing only T, pressed left, is missing
+   * only A. That is the same operation for both rows and needs no special case
+   * for how many are lit.
+   *
+   * The bank has to move its colliders with it, because for the drop targets the
+   * pattern *is* physical: `run.bank[i]` and `parts.bank[i].active` are two
+   * views of one fact and letting them drift would show a standing target the
+   * game thought was down.
+   *
+   * No completion check afterwards, and none is needed: both rows reset
+   * themselves the instant they fill, so neither can ever be sitting one short
+   * of complete with a rotation available to finish it.
+   */
+  _laneChange(dir) {
+    if (!this.run) return;
+
+    const roll = arr => arr.map((_, i) => arr[(i - dir + arr.length) % arr.length]);
+
+    this.run.lanes = roll(this.run.lanes);
+    this.run.bank = roll(this.run.bank);
+    this.parts.bank.forEach((t, i) => { t.active = !this.run.bank[i]; });
+  }
+
   _hitBankTarget(c) {
     const i = c.meta.index;
     if (!c.active) return;
@@ -874,7 +927,7 @@ export class Game {
     store.noteEncounter();
 
     const rarity = sp.effectiveRarity;
-    const shiny = chance(SHINY_ODDS);
+    const shiny = chance(this._shinyOdds());
 
     this.sub = {
       kind: 'encounter',
@@ -914,16 +967,25 @@ export class Game {
     const s = this.sub;
 
     /**
-     * Clear the per-ball contact tag first.
+     * Drop any contacts left over from the last mode.
      *
-     * A ball touching a creature when the mode ends keeps its tag, and
-     * _creatureContacts uses that tag to mean "already counted". Carried into
-     * the next mode it silently swallows the first hit — and if the ball
-     * happens to spawn on the new creature it swallows every hit, because the
-     * tag only clears once the ball gets clear. That is what stopped the second
-     * evolution of a three-stage line from ever landing.
+     * Hits are queued by _handleEvents and drained by _creatureContacts, and
+     * the two do not have to happen in the same frame. A contact still sitting
+     * in the queue when a mode ends would otherwise be credited to the next
+     * creature, which is a free hit on something the ball never touched.
      */
-    for (const ball of this.world.balls) ball.tag = null;
+    this._creatureHits.length = 0;
+
+    /**
+     * The centre of the table stands down for the whole mode.
+     *
+     * Every one of the five centres is something that blocks or bats the ball
+     * around the middle of the playfield, which is precisely where the creature
+     * drifts. Left standing, a mode can be lost to a wall of vines or the orbit
+     * ring without the player ever getting a clean shot. Paired with the
+     * despawn below so it cannot be left switched off.
+     */
+    this.parts.gimmick.setDormant(true);
 
     s.collider = circle(s.x, s.y, s.r * 0.72, {
       id: 'creature',
@@ -939,6 +1001,11 @@ export class Game {
   _despawnCreatureCollider() {
     if (this.sub?.collider) this.world.remove(this.sub.collider);
     if (this.sub) this.sub.collider = null;
+
+    // The centre comes back, and any contact not yet credited is dropped: it
+    // belonged to a creature that is no longer there.
+    this._creatureHits.length = 0;
+    this.parts.gimmick.setDormant(false);
   }
 
   _updateEncounter(dt) {
@@ -947,8 +1014,8 @@ export class Game {
 
     this._driftCreature(s, dt);
 
-    // Contact is detected here rather than through the collider's onHit so
-    // the hit and the bounce cannot disagree about how many hits landed.
+    // Contacts come from the solver, so every bounce is counted exactly once
+    // however fast the ball was going. See _creatureContacts.
     this._creatureContacts(s, hit => {
       s.meter = Math.max(0, s.meter - DISC_TIERS[this.run.discTier].power);
       s.flash = 1;
@@ -990,6 +1057,7 @@ export class Game {
     this._despawnCreatureCollider();
     this.sub = null;
     this.phase = PHASE.PLAY;
+    this._rewardBallSave();
 
     this._sound('capture', { shiny: s.shiny, isNew });
     this._emit('capture', {
@@ -1121,6 +1189,7 @@ export class Game {
     this._despawnCreatureCollider();
     this.sub = null;
     this.phase = PHASE.PLAY;
+    this._rewardBallSave();
 
     this._sound('evolve', { isNew });
     this._emit('evolve', { from: s.from, to: s.to, shiny: s.shiny, isNew, isNewShiny });
@@ -1144,7 +1213,7 @@ export class Game {
     if (!boss) { this._kickOutOfSaucer(); return; }
 
     this.run.gateArmed = false;
-    const shiny = chance(SHINY_ODDS * 2);      // a legendary is worth the better odds
+    const shiny = chance(this._shinyOdds() * 2);   // a legendary is worth the better odds
 
     this.sub = {
       kind: 'boss',
@@ -1236,6 +1305,8 @@ export class Game {
     this._despawnCreatureCollider();
     this.sub = null;
     this.phase = PHASE.PLAY;
+    // A boss win is a capture in every other respect, so it earns the same save.
+    this._rewardBallSave();
 
     this._sound('bossWin', { shiny: s.shiny });
     this._emit('bossWin', {
@@ -1250,6 +1321,36 @@ export class Game {
     if (this.phase !== PHASE.BALL_LOST) this.phase = PHASE.PLAY;
     this._sound('escape');
     this._emit('bossFled', { species: s.sp });
+  }
+
+  /* ---------------------------------------------------------------
+     Rewards shared by all three modes
+     --------------------------------------------------------------- */
+
+  /**
+   * The live shiny rate, doubled once the game passes SHINY_DOUBLE_AT.
+   *
+   * Read at the moment a creature is rolled rather than latched when the
+   * threshold is crossed, so it is always in step with the score on screen.
+   */
+  _shinyOdds() {
+    return SHINY_ODDS * (this.run.score >= SHINY_DOUBLE_AT ? 2 : 1);
+  }
+
+  /**
+   * Hand back a ball save, for landing a capture, an evolution or a boss.
+   *
+   * `Math.max` rather than an assignment: a capture inside the opening ball
+   * save must not shorten it. Skipped while the ball is already in the plunger
+   * lane, where a save would tick away unused before the plunge.
+   */
+  _rewardBallSave() {
+    if (!this.run || this.phase === PHASE.PLUNGE) return;
+    const was = this.run.ballSaveFor;
+    this.run.ballSaveFor = Math.max(was, CAPTURE_BALL_SAVE_SECONDS);
+    if (this.run.ballSaveFor > was) {
+      this._emit('ballSaveGranted', { seconds: this.run.ballSaveFor });
+    }
   }
 
   /* ---------------------------------------------------------------
@@ -1270,26 +1371,33 @@ export class Game {
   }
 
   /**
-   * Fire `onHit` once per contact between any live ball and the creature.
+   * Fire `onHit` for every contact the solver reported since the last frame.
    *
-   * The collider does the bouncing; this does the counting. Keeping them
-   * apart means a single contact cannot both bounce twice and score once, or
-   * the reverse — which is exactly the sort of mismatch that makes a capture
-   * meter jump by two.
+   * The contact *is* the bounce. The solver detects it inside its own
+   * sub-stepped loop, so the hit and the bounce are the same event by
+   * construction and cannot disagree about how many landed. The collider's
+   * 0.22 s cooldown is what stops a ball leaning on the creature from
+   * machine-gunning it.
+   *
+   * This used to measure the distance from the ball to the creature once per
+   * frame instead, and that was a race the fast shots lost. The counting shell
+   * is only about a unit thick, so a glancing hit at speed crosses it in
+   * roughly 20 ms — less than a frame at 60 Hz, and nowhere near a frame on a
+   * phone that has just dropped one. The ball visibly bounced off the creature,
+   * because physics runs at 240 Hz and saw it, and then the frame sample found
+   * the ball already clear and counted nothing. Sampling a continuous world at
+   * frame rate cannot be made reliable by widening the shell; the fix is to
+   * stop sampling.
    */
   _creatureContacts(s, onHit) {
-    if (!s.collider) return;
-    const reach = s.collider.r + 2.35;
+    if (!s.collider) { this._creatureHits.length = 0; return; }
 
-    for (const ball of this.world.balls) {
-      if (!ball.alive || ball.held) continue;
-      const d = Math.hypot(ball.pos.x - s.x, ball.pos.y - s.y);
-      if (d > reach + 0.6) { ball.tag = null; continue; }
-
-      // One hit per approach: the tag clears once the ball is clear again.
-      if (ball.tag === 'onCreature') continue;
-      ball.tag = 'onCreature';
-      onHit({ x: ball.pos.x, y: ball.pos.y });
+    // Spliced out one at a time: onHit can end the mode — a capture, an
+    // evolution — and anything still queued then belongs to nothing.
+    while (this._creatureHits.length) {
+      const hit = this._creatureHits.shift();
+      onHit(hit);
+      if (!this.sub || this.sub !== s) { this._creatureHits.length = 0; return; }
     }
   }
 
@@ -1470,8 +1578,15 @@ export class Game {
     const disc = DISC_TIERS[this.run.discTier].score;
     const gained = Math.round(base * disc * (mult ? this.run.multiplier : 1));
 
+    const before = this.run.score;
     this.run.score += gained;
     this._emit('score', { score: this.run.score, gained });
+
+    // Announced on the crossing rather than polled, so it is said once.
+    if (before < SHINY_DOUBLE_AT && this.run.score >= SHINY_DOUBLE_AT) {
+      this._emit('shinyBoost', { score: this.run.score, odds: this._shinyOdds() });
+    }
+
     this._checkExtraBall();
     return gained;
   }

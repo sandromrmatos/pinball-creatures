@@ -16,6 +16,7 @@ import {
   STAT_KEYS, STAT_LABELS,
   GATE_CATCHES_NEEDED, CAPTURE_METER, CAPTURE_SECONDS, EVOLUTION_SHARDS,
   EVOLUTION_SECONDS, BOSS_SECONDS, BALLS_PER_GAME, BALL_SAVE_SECONDS,
+  CAPTURE_BALL_SAVE_SECONDS, SHINY_DOUBLE_AT,
   EXTRA_BALL_AT, MAX_MULTIPLIER, SHINY_ODDS, SCORE,
   speciesById, lineagePath, evolutionTargets, bossOf, speciesOfType
 } from './data.js';
@@ -726,6 +727,7 @@ const RULES = [
   ['Flippers', 'Tap the left or right half of the screen. Hold to cradle the ball on the bat.'],
   ['Launch', 'Hold anywhere and let go to plunge. The longer you hold, the harder it goes.'],
   ['Nudge', 'Swipe sideways to shove the table. Lean on it and it tilts, and you lose the ball.'],
+  ['Lane change', 'Each flipper press slides the lit lanes and letters one place that way. Line up the one you need with wherever the ball is heading.'],
   ['C-A-T-C-H', 'Knock down all five drop targets to arm an encounter, then shoot the Awakening Well.'],
   ['Encounter', 'Hit the creature before the clock runs out. Rarer creatures take more hits.'],
   ['A, B, C lanes', 'Roll through all three to upgrade your disc: Capture, Great, Ultra, Master. A better disc needs fewer hits to catch.'],
@@ -822,6 +824,7 @@ export function renderGuide() {
       defs([
         ['Flippers', 'Tap or hold the left or right half of the screen. Both halves work independently, so you can hold one flipper and tap the other. Swap them in Profile if you would rather the sides were the other way round.'],
         ['Holding a flipper', 'Keeps the bat raised. A ball landing on a raised bat stays there, which is called cradling: it lets you stop, look at the table and pick a shot instead of batting at everything that comes down.'],
+        ['Lane change', 'Every flipper press slides the lit A-B-C lanes and the lit C-A-T-C-H letters one place sideways \u2014 right flipper moves them right, left flipper moves them left, wrapping round the ends. So you never have to hit a particular lane: line the one you still need up with wherever the ball is already going. If B is lit and the ball is heading for B, press right and it becomes C.'],
         ['Where you hit matters', 'The bat throws hardest at its tip and softest near the pivot, roughly 255 against 175 units per second. A ball caught near the pivot is also more likely to be clipped a second time by the bat sweeping past, which fires it off at an odd angle. Cradle, then shoot from the tip.'],
         ['Launching', 'Press and hold anywhere on the table, then let go. The longer you hold, the harder the plunge. Even the softest one clears the lane, so a light tap is a soft shot rather than a failed one.'],
         ['Nudging', 'Flick sideways across the table. This shoves the whole cabinet and can save a ball that is on its way down an outlane.'],
@@ -861,9 +864,11 @@ export function renderGuide() {
       table(['Rarity', 'Chance', 'Hits', 'Time', 'Score'], rarityRows),
       para('Chance is relative weight, not a percentage, and it is spread across only the rarities that table actually has.'),
       defs([
-        ['Shiny', `Every creature rolled has a ${(SHINY_ODDS * 100).toFixed(0)}% chance of being shiny, and a gate boss twice that. Shinies are marked with a star, score a large bonus, and are tracked separately in your Collection.`],
+        ['Shiny', `Every creature rolled has a ${(SHINY_ODDS * 100).toFixed(0)}% chance of being shiny, a gate boss twice that, and everything doubles again once your score passes ${fmtScore(SHINY_DOUBLE_AT)}. Shinies are marked with a star, score a large bonus, and are tracked separately in your Collection.`],
         ['If it gets away', 'Running out of time or losing the ball loses the creature. Nothing else is lost \u2014 arm another encounter and try again.'],
-        ['One hit per approach', 'The ball has to leave the creature and come back for the next hit to count, so resting against it does nothing.']
+        ['The centre clears out', 'For as long as a creature is out, the table\u2019s centre gimmick fades and stops touching the ball entirely \u2014 no vines, no ring, no gears, no updraught. The Well goes quiet too. The upper playfield is yours, so a mode can never be lost to a blocked shot.'],
+        ['Repeat hits', 'The creature ignores hits for a fifth of a second after each one, so leaning the ball on it does nothing. Every real contact counts, however fast the ball was moving.'],
+        ['A save comes with it', `Catching it also hands you ${CAPTURE_BALL_SAVE_SECONDS} seconds of ball save, so you can watch the reveal without defending a drain.`]
       ])
     ),
 
@@ -922,7 +927,8 @@ export function renderGuide() {
         ['Disc multiplier', 'Your disc tier multiplies everything on top of that, and unlike the multiplier it lasts the whole game.'],
         ['Big awards', 'Captures, evolutions, boss wins, completing the bank and disc upgrades are fixed amounts. They are already large and deliberately do not get multiplied again.'],
         ['Extra balls', `Awarded at ${EXTRA_BALL_AT.map(fmtScore).join(', ')} points, once each per game.`],
-        ['Where the points really are', 'Creatures. A single Epic capture is worth more than a long rally, and a legendary is worth more than everything else on the table put together.']
+        ['Where the points really are', 'Creatures. A single Epic capture is worth more than a long rally, and a legendary is worth more than everything else on the table put together.'],
+        ['Shiny odds double', `Past ${fmtScore(SHINY_DOUBLE_AT)} points every creature you meet for the rest of the game is twice as likely to be shiny. It is the one reason to keep pushing a good game rather than starting a fresh one.`]
       ])
     ),
 
@@ -931,6 +937,7 @@ export function renderGuide() {
       defs([
         ['Balls', `${BALLS_PER_GAME} per game, plus any extras. When they are gone the game is over and the next one starts fresh.`],
         ['Ball save', `The first ${BALL_SAVE_SECONDS} seconds of every ball. Drain inside that and the ball is returned to the plunger. It is used up the moment it fires.`],
+        ['Reward save', `Landing a capture, an evolution or a boss also gives you ${CAPTURE_BALL_SAVE_SECONDS} seconds of save, because the ball is always loose and fast at that moment and there is a reveal on screen. You will not lose the ball to the thing you just earned.`],
         ['Kickbacks', 'One per outlane, shown as the arrows at the bottom of the screen. Green means armed. Roll an inlane to rearm that side.'],
         ['Tilt', 'Nudging too hard or too often tilts the table. The flippers go dead and the ball is lost. The warning appears before it happens, so back off when you see it.'],
         ['Ball search', 'If the ball somehow ends up somewhere it cannot get out of, the game will shove it loose by itself after a few seconds. You should never need to restart because of a stuck ball.']

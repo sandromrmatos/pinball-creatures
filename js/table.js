@@ -57,7 +57,18 @@ export const LAYOUT = {
   width: TABLE_W,
   height: TABLE_H,
 
-  gravity: 118,
+  /**
+   * The playfield's incline, in table units per second squared.
+   *
+   * Raised from 118 because at 118 the table was slow enough that a ball
+   * trickling down a shallow surface was barely moving, which read as the ball
+   * having stopped. 132 is about a 12% lift: still short of a real cabinet's
+   * pace, but enough that nothing on the table ever looks becalmed.
+   *
+   * Anything sized against gravity has to move with it — the plunger's minimum
+   * power and the Gale Spire's updraught both do, below.
+   */
+  gravity: 132,
   drainY: 174,
 
   /** Where the play area sits once the shooter lane is taken out. */
@@ -108,7 +119,7 @@ export const LAYOUT = {
      *
      * The floor is not a taste decision: clearing the gate from the launch
      * point means climbing 109 units, which needs
-     * sqrt(2 * 118 * 109) = 160 u/s before drag. A minimum of 150 fell short,
+     * sqrt(2 * 132 * 109) = 170 u/s before drag. A minimum of 150 fell short,
      * so the softest plunge dropped back and the plunger looked broken. 190
      * clears it with room, and the range then controls how far around the dome
      * the ball carries rather than whether it gets out at all.
@@ -693,8 +704,10 @@ function gimmickUpdraft(world) {
   const G = LAYOUT.gimmick;
 
   /* An updraught strong enough to beat gravity but not to pin the ball to
-     the dome: 250 against 118 gives a net lift of about 132 u/s^2. */
-  const draught = field(G.cx - 11, G.cy - 16, 22, 32, 0, -250, {
+     the dome: 280 against 132 gives a net lift of about 148 u/s^2. Sized as a
+     ratio of gravity rather than as a fixed number, so raising the incline does
+     not quietly turn the Spire into a gentle breeze. */
+  const draught = field(G.cx - 11, G.cy - 16, 22, 32, 0, -280, {
     id: 'updraft',
     meta: { role: 'gimmick', kind: 'updraft' }
   });
@@ -867,6 +880,71 @@ const GIMMICKS = {
 };
 
 /* ---------------------------------------------------------------
+   Dormancy
+   --------------------------------------------------------------- */
+
+/**
+ * Give a gimmick the ability to stand down completely.
+ *
+ * When a mode owns the ball — an encounter, an evolution, a boss — the middle
+ * of the table has to get out of the way. The creature drifts around the upper
+ * playfield and the whole point is to hit it, so a wall of Starbloom vines or
+ * the Rune Sanctum's ring standing across the approach turns the mode into a
+ * lottery: the shot is blocked, or worse the ball is batted into a corner of the
+ * centre and the clock runs out on something the player never got to attempt.
+ * The Awakening Well already goes quiet for exactly this reason.
+ *
+ * Ownership is taken from the world rather than from a hand-written list.
+ * buildTable adds the gimmick last, so everything that appears after the mark
+ * belongs to it — colliders, fields, rotors and the funnel and hub walls that
+ * the gimmicks never bothered to return. A hand-written list would have missed
+ * those, and missing one is invisible until a ball wedges against it.
+ *
+ * The previous `active` flags are saved rather than assumed, because some are
+ * legitimately false mid-play: a cut vine is regrowing, and the updraught is
+ * between gusts. Waking then re-runs the gimmick's own update with a zero step
+ * so anything it derives per frame is correct immediately rather than one frame
+ * late.
+ */
+function attachDormancy(gimmick, world, mark) {
+  const owned = [
+    ...world.colliders.slice(mark.colliders),
+    ...world.fields.slice(mark.fields),
+    ...world.bats.slice(mark.bats)
+  ];
+
+  const rawUpdate = typeof gimmick.update === 'function'
+    ? gimmick.update.bind(gimmick)
+    : () => {};
+
+  let saved = null;
+
+  gimmick.dormant = false;
+  gimmick.owned = owned;
+
+  /* A dormant gimmick must not be driven, or it would immediately switch its
+     own colliders back on: the updraught reasserts `active` every frame. */
+  gimmick.update = dt => { if (!gimmick.dormant) rawUpdate(dt); };
+
+  gimmick.setDormant = on => {
+    const want = !!on;
+    if (want === gimmick.dormant) return;
+    gimmick.dormant = want;
+
+    if (want) {
+      saved = owned.map(o => o.active !== false);
+      for (const o of owned) o.active = false;
+    } else {
+      owned.forEach((o, i) => { o.active = saved ? saved[i] : true; });
+      saved = null;
+      rawUpdate(0);
+    }
+  };
+
+  return gimmick;
+}
+
+/* ---------------------------------------------------------------
    Assembly
    --------------------------------------------------------------- */
 
@@ -896,8 +974,15 @@ export function buildTable(type) {
   buildLower(world, parts);
   buildFlippers(world, parts);
 
+  /* Everything added from here on belongs to the gimmick. See attachDormancy. */
+  const mark = {
+    colliders: world.colliders.length,
+    fields: world.fields.length,
+    bats: world.bats.length
+  };
+
   const make = GIMMICKS[mode.gimmick] || GIMMICKS.herd;
-  parts.gimmick = make(world);
+  parts.gimmick = attachDormancy(make(world), world, mark);
 
   return { world, parts, layout: LAYOUT, mode };
 }

@@ -129,6 +129,19 @@ export const BOSS_OVERRIDES = {
 /** Shiny rate, matching Search and Go's baseline wild odds. */
 export const SHINY_ODDS = 0.01;
 
+/**
+ * Past this score the shiny rate doubles for the rest of the game.
+ *
+ * A reward for a long game rather than for grinding short ones. A million is
+ * reachable but not routine — it sits between the first extra ball at 500k and
+ * the second at 1.5m, so it lands in the middle of a good run rather than at
+ * the end of it, and there is still most of a game left to spend it.
+ *
+ * It is checked against the live score, so it also applies to a boss, whose
+ * odds are already doubled and therefore become four times baseline.
+ */
+export const SHINY_DOUBLE_AT = 1_000_000;
+
 /* ---------------------------------------------------------------
    Discs — the ball tiers
    --------------------------------------------------------------- */
@@ -159,6 +172,20 @@ export const BALLS_PER_GAME = 3;
 
 /** Seconds of ball save at the start of every ball. */
 export const BALL_SAVE_SECONDS = 8;
+
+/**
+ * Seconds of ball save granted the moment a capture or an evolution lands.
+ *
+ * Finishing one of those is the biggest reward in the game and it always ends
+ * with the ball loose in the middle of the table, moving fast, with a reveal
+ * on screen — which is the worst possible moment to have to defend a drain.
+ * Losing the ball to the thing you just earned reads as a punishment for
+ * succeeding.
+ *
+ * Longer than the per-ball save because it has to cover reading the reveal as
+ * well as recovering the ball.
+ */
+export const CAPTURE_BALL_SAVE_SECONDS = 10;
 
 /** Score thresholds that award an extra ball, each awarded once per game. */
 export const EXTRA_BALL_AT = [500_000, 1_500_000, 4_000_000];

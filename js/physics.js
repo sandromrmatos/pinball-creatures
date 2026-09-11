@@ -85,7 +85,7 @@ export const MAX_STEPS_PER_FRAME = 12;
  * Terminal speed, as a safety net rather than a design value.
  *
  * For scale: a ball dropped the full height of the table under standard
- * gravity arrives at about 206 u/s, and a strong flipper shot leaves at
+ * gravity arrives at about 218 u/s, and a strong flipper shot leaves at
  * roughly 260. This ceiling only exists to stop a pathological case — a ball
  * pinched between a gear and a wall — from compounding into a rocket.
  */
@@ -94,6 +94,41 @@ export const MAX_SPEED = 330;
 /** Below this the ball is treated as at rest against a surface, which stops
     the endless micro-bouncing you otherwise get in a shallow trough. */
 const REST_SPEED = 1.6;
+
+/**
+ * How much of a surface's friction survives a resting contact.
+ *
+ * Coulomb friction has a static regime: a ball on a slope is held for good
+ * whenever tan(angle) is under mu x (1 + e). With the flipper's rubber at
+ * mu 0.5 that angle is 30 degrees, and even a plain wall at mu 0.05 holds
+ * anything under 4 — so the ball would park on a lowered flipper, on a target
+ * face, or in the crook of a funnel and stay there. On a table where gravity
+ * *is* the playfield's incline, that is simply wrong: if a surface is tilted at
+ * all the ball has to keep creeping down it.
+ *
+ * Raising gravity does not help, which is worth knowing before reaching for it:
+ * the holding force and the pull along the slope both scale with gravity, so the
+ * angle at which the ball sticks is identical at any incline. The grip is the
+ * only thing that can be changed.
+ *
+ * The reason it is wrong is that a pinball rolls. Rolling resistance is a small
+ * fraction of sliding friction, and this is the fraction. It puts the holding
+ * angle at about a tenth of a degree on a wall and one degree on flipper
+ * rubber — near enough to "any slope at all keeps the ball moving", which is
+ * the behaviour being asked for.
+ *
+ * Cradling a ball on a raised flipper still works, and works for the right
+ * reason: the ball rolls *down* the raised bat towards the pivot and settles in
+ * the pocket between the bat and the inlane wall, held by geometry rather than
+ * by grip. On a lowered bat it rolls the other way, off the tip and towards the
+ * drain, which is exactly what a real table does.
+ *
+ * Only resting contacts are scaled. A real impact — a flipper swinging into the
+ * ball, a shot into a target — has a large normal speed and keeps the full
+ * friction, so the grip that makes a tip shot differ from a base shot is
+ * untouched.
+ */
+const ROLLING_GRIP = 0.03;
 
 /* ---------------------------------------------------------------
    Ball
@@ -251,7 +286,7 @@ export class Flipper {
    * numbers below.
    *
    * The design target is a full tip shot of about 250 u/s. Reaching the top of
-   * the table from the flippers needs sqrt(2 * 118 * 138) = 180 u/s, so 250 is
+   * the table from the flippers needs sqrt(2 * 132 * 138) = 191 u/s, so 250 is
    * a decisive shot with headroom, and it stays well clear of MAX_SPEED — a
    * flipper that pins every shot against the clamp makes aiming meaningless.
    *
@@ -437,7 +472,7 @@ const insideRect = (p, r, rect) =>
    --------------------------------------------------------------- */
 
 export class World {
-  constructor({ gravity = 118, drainY = TABLE_H + 6 } = {}) {
+  constructor({ gravity = 132, drainY = TABLE_H + 6 } = {}) {
     /** Downward acceleration in table units per second squared. */
     this.gravity = gravity;
     this.drainY = drainY;
@@ -754,7 +789,12 @@ export class World {
     if (vn < 0) {
       // Low-speed contacts get almost no restitution, so a ball settles into
       // a trough instead of buzzing in it.
-      const e = Math.abs(vn) < REST_SPEED ? restitution * 0.25 : restitution;
+      const resting = Math.abs(vn) < REST_SPEED;
+      const e = resting ? restitution * 0.25 : restitution;
+
+      // A resting ball rolls rather than slides, so it keeps only a fraction of
+      // the grip. See ROLLING_GRIP: this is what stops it parking on a slope.
+      const mu = resting ? friction * ROLLING_GRIP : friction;
 
       /* Normal impulse per unit mass. Always non-negative here. */
       const jn = -(1 + e) * vn;
@@ -775,7 +815,7 @@ export class World {
       const ty = rvy - vn * n.y;
       const tLen = Math.hypot(tx, ty);
 
-      const drop = Math.min(friction * jn, tLen);
+      const drop = Math.min(mu * jn, tLen);
       const keep = tLen > 1e-9 ? (tLen - drop) / tLen : 0;
 
       rvx = tx * keep + (vn + jn) * n.x;

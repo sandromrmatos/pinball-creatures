@@ -557,6 +557,17 @@ export class Renderer {
     if (!g) return;
     const t = this.world.time;
 
+    /**
+     * A dormant centre is drawn as a ghost of itself.
+     *
+     * While a mode owns the ball the gimmick stops colliding, and something the
+     * ball passes straight through has to look like it. Faded rather than hidden
+     * so the table does not appear to lose half its furniture for ten seconds
+     * and then grow it back.
+     */
+    ctx.save();
+    if (g.dormant) ctx.globalAlpha *= 0.22;
+
     for (const c of g.colliders) {
       const lit = c.litUntil > t;
       const kind = c.meta?.kind;
@@ -606,14 +617,28 @@ export class Renderer {
       }
       ctx.restore();
     }
+
+    ctx.restore();
   }
 
   /* ---- flippers and rotors ---- */
 
+  /**
+   * An inactive bat is faded, which covers both cases that produce one: a gear
+   * or disc standing down for a mode, and a flipper killed by a tilt. In both
+   * the ball now passes through it, so both have to stop looking solid.
+   */
   _bats(ctx) {
-    for (const f of this.world.flippers) this._capsule(ctx, f.pivot, f.tip, f.thick, BASE.chrome, true);
+    for (const f of this.world.flippers) {
+      ctx.save();
+      if (!f.active) ctx.globalAlpha *= 0.3;
+      this._capsule(ctx, f.pivot, f.tip, f.thick, BASE.chrome, true);
+      ctx.restore();
+    }
 
     for (const r of this.world.rotors) {
+      ctx.save();
+      if (!r.active) ctx.globalAlpha *= 0.22;
       // Both arms, because both of them hit.
       this._capsule(ctx, r.tail, r.tip, r.thick, this.mode.colour, false);
       ctx.save();
@@ -624,6 +649,8 @@ export class Renderer {
       ctx.strokeStyle = this.mode.colour;
       ctx.lineWidth = 0.5;
       ctx.stroke();
+      ctx.restore();
+
       ctx.restore();
     }
   }

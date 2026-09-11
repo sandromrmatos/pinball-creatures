@@ -295,6 +295,20 @@ function handleGameEvent(type, p) {
       toast('Ball saved.');
       break;
 
+    /**
+     * Announced rather than left to the HUD counter alone. It arrives at the
+     * same moment as a capture or evolution reveal, which is exactly when the
+     * player is not looking at the corner of the screen, and the whole value of
+     * the save is knowing it is there.
+     */
+    case 'ballSaveGranted':
+      toast(`Ball save \u00b7 ${Math.round(p.seconds)}s`, { kind: 'good' });
+      break;
+
+    case 'shinyBoost':
+      toast('1,000,000 \u2014 shiny odds doubled.', { kind: 'good', ms: 3200 });
+      break;
+
     case 'tilt':
       toast('TILT \u2014 flippers dead until the next ball.', { kind: 'bad', ms: 3000 });
       buzz([60, 40, 60]);

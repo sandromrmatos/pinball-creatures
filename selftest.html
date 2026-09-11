@@ -40,7 +40,8 @@ import {
   bossOf, rollEncounter, speciesByName, lineagePath,
   familyMembers, effectiveRarityOf, parseCSV, CAPTURE_METER, DISC_TIERS,
   MAX_DISC_TIER, MAX_MULTIPLIER, GATE_CATCHES_NEEDED, EVOLUTION_SHARDS,
-  EXTRA_BALL_AT, SCORE
+  EXTRA_BALL_AT, SCORE, BALLS_PER_GAME,
+  CAPTURE_BALL_SAVE_SECONDS, SHINY_ODDS, SHINY_DOUBLE_AT
 } from './js/data.js';
 
 import {
@@ -353,6 +354,96 @@ async function run() {
       check(`stays inside the box at ${speed} u/s`, !escaped,
             escaped ? `escaped to ${b.pos.x.toFixed(1)},${b.pos.y.toFixed(1)}` : '');
     }
+  }
+
+  /**
+   * The bug this exists for: a fast glancing hit on the encounter creature
+   * bounced but was not counted.
+   *
+   * Contact used to be decided by measuring the distance from the ball to the
+   * creature once per animation frame. The shell that counts as a contact is
+   * about a unit thick, so a shot that clips the edge at speed is inside it for
+   * only a few milliseconds — less than a frame. Physics saw the contact,
+   * because it runs at 240 Hz and sub-steps on top of that, and the frame sample
+   * found the ball already gone.
+   *
+   * This asserts the property that fixes it: the solver reports every contact,
+   * at any speed and any angle, with frames as coarse as the game ever uses.
+   * The note records how many of the same shots a frame sample would have
+   * missed, which is the size of the hole that was there.
+   */
+  group('physics: a glancing contact at speed is reported, not sampled');
+  {
+    /* The creature's real numbers, from Game._spawnCreatureCollider. */
+    const RC = 11 * 0.72;
+    const RB = 2.35;
+    const reach = RB + RC;
+
+    let shots = 0, reported = 0, sampleWouldMiss = 0;
+
+    for (const b of [0.5, 3, 5, 7, 8.5, 9.4, 10.1]) {
+      // Several sub-frame phases, because whether a frame boundary happens to
+      // land inside the shell is pure luck — which is what made the bug
+      // intermittent rather than obvious.
+      for (const phase of [0, 0.27, 0.51, 0.78]) {
+        const w = new World({ gravity: 0 });
+        const c = circle(0, 0, RC, { restitution: 0.5, friction: 0.05, kick: 26, cooldownFor: 0.22 });
+        w.add(c);
+
+        const speed = MAX_SPEED;
+        const frameTravel = speed / 60;
+        const ball = w.addBall(new Ball({ x: b, y: 40 + phase * frameTravel, r: RB }));
+        ball.setVel(0, -speed);
+
+        let sawEvent = false, sawSample = false;
+        for (let f = 0; f < 24; f++) {
+          w.advance(1 / 60);                       // one 60 Hz frame, as main.js does
+          if (w.drainEvents().some(e => e.type === 'hit' && e.collider === c)) sawEvent = true;
+          if (Math.hypot(ball.pos.x, ball.pos.y) <= reach + 0.6) sawSample = true;
+        }
+
+        shots++;
+        if (sawEvent) reported++;
+        if (sawEvent && !sawSample) sampleWouldMiss++;
+      }
+    }
+
+    check('every glancing contact is reported', reported === shots, `${reported} of ${shots}`);
+    note(`frame sampling would have missed ${sampleWouldMiss} of ${shots} of the same shots`);
+  }
+
+  /**
+   * A ball must never park on a slope.
+   *
+   * Coulomb friction has a static regime, and with the flipper's rubber it
+   * reaches 30 degrees: the ball simply stopped on a lowered bat, on a target
+   * face, in the crook of a funnel. On a table where gravity *is* the incline
+   * that is wrong — a tilted surface has to keep the ball creeping. See
+   * ROLLING_GRIP in physics.js.
+   */
+  group('physics: nothing holds the ball on a slope');
+  {
+    const slid = [];
+    for (const deg of [2, 5, 10, 20, 35]) {
+      for (const [what, friction, restitution] of [['wall', 0.05, 0.42], ['rubber', 0.5, 0.15]]) {
+        const w = new World({ gravity: 132 });
+        const rad = deg * Math.PI / 180;
+        const len = 60;
+        // A long slope through (50, 90), descending to the right.
+        w.add(segment(
+          50 - Math.cos(rad) * len / 2, 90 - Math.sin(rad) * len / 2,
+          50 + Math.cos(rad) * len / 2, 90 + Math.sin(rad) * len / 2,
+          { friction, restitution }
+        ));
+        const ball = w.addBall(new Ball({ x: 50, y: 90 - 3 }));
+        const x0 = ball.pos.x;
+        for (let i = 0; i < 240 * 3; i++) w.step(PHYS_DT);   // three seconds
+        const moved = ball.pos.x - x0;
+        slid.push(`${what}@${deg}:${moved.toFixed(1)}`);
+        check(`a ${what} at ${deg} degrees does not hold it`, moved > 4, moved.toFixed(2));
+      }
+    }
+    note(slid.join(' '));
   }
 
   group('physics: arc contains the ball');
@@ -695,15 +786,25 @@ async function run() {
 
     b.held = false;
     b.setVel(0, -launchImpulse(1));
+    /**
+     * Stopped at the drain, because past it there is nothing left to test. The
+     * real game takes the ball out of play there; carrying on simulating means
+     * watching a drained ball free-fall out of the bottom of the world and then
+     * wander sideways, which is not an escape from the table by any useful
+     * definition. That false positive is exactly what this used to report.
+     */
     let reachedPlay = false, escaped = false;
     for (let i = 0; i < 240 * 6; i++) {
       world.step(PHYS_DT);
       if (b.pos.x < LAYOUT.shooter.x0 - 2) reachedPlay = true;
+      if (b.pos.y > LAYOUT.drainY) break;
       if (b.pos.x < -1 || b.pos.x > TABLE_W + 1 || b.pos.y < -1) { escaped = true; break; }
     }
     check('a full plunge reaches the playfield', reachedPlay,
           `ended at ${b.pos.x.toFixed(1)},${b.pos.y.toFixed(1)}`);
-    check('the ball never leaves the table', !escaped);
+    check('the ball never leaves the table', !escaped,
+          escaped ? `escaped at ${b.pos.x.toFixed(1)},${b.pos.y.toFixed(1)} ` +
+                    `v ${b.vel.x.toFixed(0)},${b.vel.y.toFixed(0)}` : '');
 
     // Even the softest plunge must get out of the lane, or the control reads
     // as broken rather than gentle.
@@ -894,11 +995,24 @@ async function run() {
     // glancing one part way through the swing â€” so the ball gets carried up
     // by the bat instead of thrown by it, which reads as the flipper failing.
     b.moveTo(f.pivot.x + dx * along + dy * (gap + 3), f.pivot.y + dy * along - dx * (gap + 3));
-    for (let i = 0; i < 40; i++) world.step(PHYS_DT);
 
-    check('the ball settles on the bat, above the drain',
-          b.pos.y < LAYOUT.drainY && b.pos.y > 140 && b.speed < 20,
+    /**
+     * Long enough to land on the bat, not long enough to roll off it.
+     *
+     * A lowered bat slopes down towards its tip, and a ball no longer parks on a
+     * slope — it rolls, which is the whole point of ROLLING_GRIP. So there is no
+     * "settled on the bat" state to wait for with the flipper down, and waiting
+     * for one only lets the ball reach the tip and leave. A player flips as the
+     * ball arrives, so the test does too. Cradling is a *raised* bat, which is a
+     * different shot and is covered by the recovery loop in "nothing gets stuck".
+     */
+    for (let i = 0; i < 12; i++) world.step(PHYS_DT);
+
+    check('the ball lands on the bat, above the drain',
+          b.pos.y < LAYOUT.drainY && b.pos.y > 140,
           `y ${b.pos.y.toFixed(1)} speed ${b.speed.toFixed(1)}`);
+    check('and is rolling on it rather than falling past it', b.speed < 60,
+          b.speed.toFixed(1));
 
     const yBefore = b.pos.y;
     note(`save: ball rests at (${b.pos.x.toFixed(1)}, ${b.pos.y.toFixed(1)})`);
@@ -1225,6 +1339,17 @@ async function run() {
     check('the boss outranks everything', g._armedMode() === 'boss');
   }
 
+  /**
+   * Stage a contact the way the solver does.
+   *
+   * Creature hits are queued by Game._handleEvents from the physics event list
+   * and drained by whichever mode is running, so a test that wants "the ball
+   * hit it" has to put a contact in the queue. Moving the ball on top of the
+   * creature is no longer enough, and that is the point of the change: nothing
+   * about a position at a frame boundary decides whether a hit landed.
+   */
+  const strike = g => { g._creatureHits.push({ x: g.sub.x, y: g.sub.y }); };
+
   group('game: encounter and capture');
   {
     const events = [];
@@ -1262,23 +1387,31 @@ async function run() {
           g.sub.y > 40 && g.sub.y < 112 && g.sub.x > 14 && g.sub.x < 71,
           `${g.sub.x.toFixed(1)},${g.sub.y.toFixed(1)}`);
 
-    /* Hits: one per approach, not one per frame. */
+    /* Every contact the solver reported is counted, exactly once. */
     const target = g.sub;
-    const needed = Math.ceil(target.meterMax / DISC_TIERS[g.run.discTier].power);
     let hits = 0;
-    for (let i = 0; i < needed; i++) {
-      g.ball.moveTo(target.x, target.y);          // touching
-      g._creatureContacts(target, () => hits++);
-      g.ball.moveTo(target.x + 40, target.y);     // clear again
-      g._creatureContacts(target, () => {});
-    }
-    check('each approach counts once', hits === needed, `${hits} of ${needed}`);
+    strike(g); strike(g);
+    g._creatureContacts(target, () => hits++);
+    check('every reported contact counts', hits === 2, String(hits));
+    check('the queue is drained', g._creatureHits.length === 0);
+    g._creatureContacts(target, () => hits++);
+    check('nothing is counted twice', hits === 2, String(hits));
 
-    // Resting against it must not machine-gun the meter.
-    let spam = 0;
+    /**
+     * Leaning on the creature is bounded by the collider's own cooldown rather
+     * than by the frame rate, which is what replaced the old one-hit-per-approach
+     * tag. A second of contact must produce a handful of hits, not 240.
+     */
     g.ball.moveTo(target.x, target.y);
-    for (let i = 0; i < 50; i++) g._creatureContacts(target, () => spam++);
-    check('sitting on the creature scores once', spam === 1, String(spam));
+    g.ball.setVel(0, 0);
+    let reported = 0;
+    for (let i = 0; i < 240; i++) {
+      g.world.step(PHYS_DT);
+      reported += g.world.drainEvents()
+        .filter(e => e.type === 'hit' && e.collider === target.collider).length;
+    }
+    check('contact is reported at least once', reported >= 1, String(reported));
+    check('and the cooldown bounds it', reported <= 6, String(reported));
   }
 
   group('game: a capture registers and can open the gate');
@@ -1379,7 +1512,7 @@ async function run() {
     check('evolutionStart fired', events.some(e => e.t === 'evolutionStart'));
 
     // Hitting the creature before the shards are in must not evolve it.
-    g.ball.moveTo(g.sub.x, g.sub.y);
+    strike(g);
     g._updateEvolution(0.016);
     check('an early hit does not evolve it', g.phase === PHASE.EVOLUTION && g.sub !== null);
 
@@ -1389,9 +1522,7 @@ async function run() {
     check('evolutionReady fired', events.some(e => e.t === 'evolutionReady'));
 
     // Now the hit lands.
-    g.ball.moveTo(g.sub.x + 40, g.sub.y);
-    g._creatureContacts(g.sub, () => {});          // clear the tag
-    g.ball.moveTo(g.sub.x, g.sub.y);
+    strike(g);
     g._updateEvolution(0.016);
 
     check('it evolves', g.sub === null && g.phase === PHASE.PLAY);
@@ -1470,6 +1601,223 @@ async function run() {
     }
   }
 
+  /**
+   * The centre of the table has to get out of the way for a mode, the same way
+   * the Well does. A creature drifts around the upper playfield and the whole
+   * mode is about hitting it, so a wall of vines or the orbit ring standing
+   * across the approach can lose a mode the player never got to attempt.
+   *
+   * Ownership is taken from the world, so this also proves the walls the gimmick
+   * factories never returned — funnels, gear hubs — are covered. Those are the
+   * ones a hand-written list would have missed.
+   */
+  group('table: a mode stands the centre down');
+  {
+    for (const type of TYPES) {
+      await store.startFresh();
+      const g2 = new Game({});
+      g2.start(type);
+      g2.plungeRelease();
+
+      const gim = g2.parts.gimmick;
+      check(`${type}: the centre owns something`, gim.owned.length > 0, String(gim.owned.length));
+      check(`${type}: it starts awake`, gim.dormant === false);
+
+      g2.run.encounterArmed = true;
+      g2._enterSaucer(g2.ball);
+      g2._lastNow = 960000;
+      g2._updateSaucer(960000);
+      check(`${type}: the encounter started`, g2.phase === PHASE.ENCOUNTER, g2.phase);
+
+      check(`${type}: the centre is dormant`, gim.dormant === true);
+      check(`${type}: nothing it owns can be touched`,
+            gim.owned.every(o => o.active === false),
+            gim.owned.filter(o => o.active !== false).map(o => o.id).join(','));
+
+      // Driving it must not switch its own colliders back on. The updraught
+      // reasserts `active` every frame, so this is not hypothetical.
+      for (let i = 0; i < 300; i++) gim.update(0.016);
+      check(`${type}: it stays down while driven`,
+            gim.owned.every(o => o.active === false));
+
+      // And the creature's own collider is emphatically still live.
+      check(`${type}: the creature is still collidable`, g2.sub.collider.active !== false);
+
+      // Ending the mode brings it back.
+      g2.sub.meter = 0;
+      g2._updateEncounter(0.016);
+      check(`${type}: the mode ended`, g2.sub === null);
+      check(`${type}: the centre woke up`, gim.dormant === false);
+      check(`${type}: its colliders are live again`,
+            gim.owned.filter(o => o.kind !== 'field').every(o => o.active !== false),
+            gim.owned.filter(o => o.kind !== 'field' && o.active === false).map(o => o.id).join(','));
+    }
+  }
+
+  group('game: a capture, an evolution and a boss all hand back a ball save');
+  {
+    const cases = [
+      ['capture', g2 => { g2.run.encounterArmed = true; }, PHASE.ENCOUNTER,
+       g2 => { g2.sub.meter = 0; g2._updateEncounter(0.016); }],
+      ['evolution', g2 => {
+        g2.run.caught.push({ uid: 'r1', speciesId: speciesByName('Meditot').id, shiny: false });
+        g2.run.evolutionArmed = true;
+      }, PHASE.EVOLUTION,
+       g2 => { g2.sub.shards = EVOLUTION_SHARDS; strike(g2); g2._updateEvolution(0.016); }],
+      ['boss win', g2 => { g2.run.gateArmed = true; }, PHASE.BOSS,
+       g2 => { g2.sub.meter = 0; g2.sub.shielded = false; strike(g2); g2._updateBoss(0.016); }]
+    ];
+
+    for (const [label, arm, expected, finish] of cases) {
+      await store.startFresh();
+      const events = [];
+      const g2 = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+      g2.start('Mystic');
+      g2.plungeRelease();
+      arm(g2);
+
+      g2._enterSaucer(g2.ball);
+      g2._lastNow = 970000;
+      g2._updateSaucer(970000);
+      check(`${label}: the mode started`, g2.phase === expected, g2.phase);
+
+      // Burn the opening save off first, so what is left can only have come
+      // from the reward.
+      g2.run.ballSaveFor = 0;
+      finish(g2);
+
+      check(`${label}: it completed`, g2.sub === null, g2.phase);
+      check(`${label}: a save was granted`,
+            g2.run.ballSaveFor === CAPTURE_BALL_SAVE_SECONDS, String(g2.run.ballSaveFor));
+      check(`${label}: and announced`, events.some(e => e.t === 'ballSaveGranted'));
+
+      // It has to actually save the ball, not just show a number.
+      g2.ball.moveTo(50, LAYOUT.drainY + 3);
+      g2._checkDrain();
+      check(`${label}: draining returns the ball to the plunger`,
+            g2.phase === PHASE.PLUNGE && g2.run.ballsLeft === BALLS_PER_GAME,
+            `${g2.phase} balls=${g2.run.ballsLeft}`);
+    }
+
+    // A capture inside the opening save must not cut it short.
+    await store.startFresh();
+    const g3 = new Game({});
+    g3.start('Mystic');
+    g3.plungeRelease();
+    g3.run.ballSaveFor = 30;
+    g3.run.encounterArmed = true;
+    g3._enterSaucer(g3.ball);
+    g3._lastNow = 980000;
+    g3._updateSaucer(980000);
+    g3.sub.meter = 0;
+    g3._updateEncounter(0.016);
+    check('a reward save never shortens a longer one', g3.run.ballSaveFor === 30,
+          String(g3.run.ballSaveFor));
+  }
+
+  group('game: shiny odds double past a million');
+  {
+    await store.startFresh();
+    const events = [];
+    const g2 = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g2.start('Mystic');
+    g2.plungeRelease();
+
+    check('the baseline is the plain rate', g2._shinyOdds() === SHINY_ODDS, String(g2._shinyOdds()));
+
+    g2.run.score = SHINY_DOUBLE_AT - 1;
+    check('just short of it, still baseline', g2._shinyOdds() === SHINY_ODDS);
+
+    g2.run.score = SHINY_DOUBLE_AT;
+    check('on the threshold it doubles', g2._shinyOdds() === SHINY_ODDS * 2, String(g2._shinyOdds()));
+
+    // Announced once, on the crossing.
+    const g3 = new Game({ onEvent: (t, p) => events.push({ t, p }) });
+    g3.start('Mystic');
+    g3.plungeRelease();
+    g3.run.score = SHINY_DOUBLE_AT - 10;
+    g3._award(100, { mult: false });
+    g3._award(100, { mult: false });
+    check('the crossing is announced exactly once',
+          events.filter(e => e.t === 'shinyBoost').length === 1,
+          String(events.filter(e => e.t === 'shinyBoost').length));
+  }
+
+  /**
+   * Lane change: the classic pinball courtesy. A flipper press slides the lit
+   * pattern one place sideways so the player can line up the lane or letter they
+   * still need with wherever the ball is already heading.
+   */
+  group('game: the flippers change lanes');
+  {
+    await store.startFresh();
+    const g2 = new Game({});
+    g2.start('Neutral');
+    g2.plungeRelease();
+
+    /* ---- the ABC lanes ---- */
+    g2.run.lanes = [false, true, false];          // only B
+    g2.flip('right', true);
+    check('right moves a lit lane right', g2.run.lanes.join() === 'false,false,true',
+          g2.run.lanes.join());
+
+    g2.flip('right', false);
+    check('releasing does nothing', g2.run.lanes.join() === 'false,false,true');
+
+    g2.flip('left', true);
+    check('left moves it back', g2.run.lanes.join() === 'false,true,false', g2.run.lanes.join());
+
+    // Wrapping, in both directions.
+    g2.run.lanes = [false, false, true];
+    g2.flip('left', false);                       // the left bat is still up from above
+    g2.flip('right', false); g2.flip('right', true);
+    check('right wraps round the end', g2.run.lanes.join() === 'true,false,false',
+          g2.run.lanes.join());
+    g2.flip('left', true);
+    check('left wraps the other way', g2.run.lanes.join() === 'false,false,true',
+          g2.run.lanes.join());
+
+    // Only the press edge counts: a held flipper must not rotate every frame.
+    const held = g2.run.lanes.join();
+    for (let i = 0; i < 10; i++) g2.flip('left', true);
+    check('holding a flipper does not keep rotating', g2.run.lanes.join() === held,
+          g2.run.lanes.join());
+
+    /* ---- the CATCH bank ---- */
+    // Everything down except T, which is the example worth getting right: the
+    // letter you still need should move from T to A on a left press.
+    g2.run.bank = [true, true, false, true, true];
+    g2.parts.bank.forEach((t, i) => { t.active = !g2.run.bank[i]; });
+
+    g2.flip('left', false); g2.flip('left', true);
+    check('the missing letter moves from T to A',
+          g2.run.bank.join() === 'true,false,true,true,true', g2.run.bank.join());
+    check('the drop targets moved with it',
+          g2.parts.bank.map(t => t.active).join() === 'false,true,false,false,false',
+          g2.parts.bank.map(t => t.active).join());
+
+    g2.flip('right', false); g2.flip('right', true);
+    check('and back again on a right press',
+          g2.run.bank.join() === 'true,true,false,true,true', g2.run.bank.join());
+    check('the targets stayed in step',
+          g2.parts.bank.every((t, i) => t.active === !g2.run.bank[i]));
+
+    // Rotating must not conjure a completion, and a full row cannot exist
+    // anyway because both rows reset the instant they fill.
+    const scoreBefore = g2.run.score;
+    for (let i = 0; i < 20; i++) { g2.flip('right', false); g2.flip('right', true); }
+    check('rotating never completes a row', g2.run.score === scoreBefore,
+          `${scoreBefore} -> ${g2.run.score}`);
+    check('the bank still has exactly one standing',
+          g2.parts.bank.filter(t => t.active).length === 1);
+
+    // A tilted table has no flippers, so it has no lane change either.
+    g2.world.tilted = true;
+    const before = g2.run.lanes.join();
+    g2.flip('right', false); g2.flip('right', true);
+    check('a tilt kills lane change too', g2.run.lanes.join() === before);
+  }
+
   group('game: Evolution Mode signals the shard bank');
   {
     await store.startFresh();
@@ -1497,7 +1845,7 @@ async function run() {
 
     // Once the mode ends, the bank goes back to meaning CATCH.
     g2.sub.shards = EVOLUTION_SHARDS;
-    g2.ball.moveTo(g2.sub.x, g2.sub.y);
+    strike(g2);
     g2._updateEvolution(0.016);
     check('the mode ended', g2.sub === null);
     check('shard mode is off again', g2.view().shardMode === false);
@@ -1522,7 +1870,7 @@ async function run() {
       check(`evolution mode started for ${expected}`, g.phase === PHASE.EVOLUTION, g.phase);
       check(`target is ${expected}`, g.sub.to.name === expected, g.sub.to.name);
       g.sub.shards = EVOLUTION_SHARDS;
-      g.ball.moveTo(g.sub.x, g.sub.y);
+      strike(g);
       g._updateEvolution(0.016);
       check(`${expected} registered`, store.isRegistered(speciesByName(expected).id));
     }
@@ -1566,7 +1914,7 @@ async function run() {
     g2.sub.shielded = true;
     g2.sub.shieldTimer = 99;
     const meterBefore = g2.sub.meter;
-    g2.ball.moveTo(g2.sub.x, g2.sub.y);
+    strike(g2);
     g2._updateBoss(0.016);
     check('a shielded hit does not damage it', g2.sub.meter === meterBefore, String(g2.sub.meter));
     check('bossBlocked fired', events.some(e => e.t === 'bossBlocked'));
@@ -1574,9 +1922,7 @@ async function run() {
     // Unshielded, it does.
     g2.sub.shielded = false;
     g2.sub.shieldTimer = 99;
-    g2.ball.moveTo(g2.sub.x + 40, g2.sub.y);
-    g2._creatureContacts(g2.sub, () => {});
-    g2.ball.moveTo(g2.sub.x, g2.sub.y);
+    strike(g2);
     g2._updateBoss(0.016);
     check('an unshielded hit does damage it', g2.sub.meter < meterBefore, String(g2.sub.meter));
 
