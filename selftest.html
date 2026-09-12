@@ -1818,6 +1818,113 @@ async function run() {
     check('a tilt kills lane change too', g2.run.lanes.join() === before);
   }
 
+  /**
+   * A ball save mid-mode must not freeze the game.
+   *
+   * The third instance of one bug: `phase` and `sub` are two records of the same
+   * fact and they drift. A ball save returns the ball to the plunger and sets the
+   * phase to PLUNGE, so the phase-keyed dispatch stopped updating a mode that was
+   * still very much alive — creature frozen, clock frozen, hits ignored. Trivial
+   * to hit now that a capture grants ten seconds of save.
+   *
+   * All three modes, because any one of them could be the one that is missed.
+   */
+  group('game: a ball save mid-mode does not freeze it');
+  {
+    const cases = [
+      ['encounter', g2 => { g2.run.encounterArmed = true; }, PHASE.ENCOUNTER],
+      ['evolution', g2 => {
+        g2.run.caught.push({ uid: 'r1', speciesId: speciesByName('Meditot').id, shiny: false });
+        g2.run.evolutionArmed = true;
+      }, PHASE.EVOLUTION],
+      ['boss', g2 => { g2.run.gateArmed = true; }, PHASE.BOSS]
+    ];
+
+    for (const [label, arm, expected] of cases) {
+      await store.startFresh();
+      const g2 = new Game({});
+      g2.start('Mystic');
+      g2.plungeRelease();
+      arm(g2);
+
+      g2._enterSaucer(g2.ball);
+      g2._lastNow = 990000;
+      g2._updateSaucer(990000);
+      check(`${label}: the mode started`, g2.phase === expected, g2.phase);
+
+      const sub = g2.sub;
+      const secondsAtStart = sub.seconds;
+
+      // Drain, with a save in hand. Exactly what a capture leaves behind.
+      g2.run.ballSaveFor = CAPTURE_BALL_SAVE_SECONDS;
+      g2.ball.moveTo(50, LAYOUT.drainY + 3);
+      g2._checkDrain();
+
+      check(`${label}: the ball was saved`, g2.phase === PHASE.PLUNGE, g2.phase);
+      check(`${label}: the mode survived it`, g2.sub === sub);
+      check(`${label}: its collider is still in the world`,
+            g2.world.colliders.includes(sub.collider));
+      check(`${label}: the centre is still standing down`,
+            g2.parts.gimmick.dormant === true);
+
+      /* Frozen means the creature stops moving. Run real frames and watch. */
+      const x0 = sub.x, y0 = sub.y;
+      let now = 991000;
+      for (let i = 0; i < 60; i++) { now += 16; g2.update(now); }
+      check(`${label}: the creature is still moving`,
+            Math.hypot(sub.x - x0, sub.y - y0) > 1,
+            `${x0.toFixed(1)},${y0.toFixed(1)} -> ${sub.x.toFixed(1)},${sub.y.toFixed(1)}`);
+
+      // And the clock is held, not run down, while it waits in the plunger.
+      check(`${label}: the clock is held in the lane`, sub.seconds === secondsAtStart,
+            `${secondsAtStart.toFixed(2)} -> ${sub.seconds.toFixed(2)}`);
+
+      // Plunging returns to the mode's phase, not to plain PLAY.
+      g2.plungeRelease();
+      check(`${label}: the plunge returns to the mode`, g2.phase === expected, g2.phase);
+
+      // Now the clock runs again.
+      for (let i = 0; i < 30; i++) { now += 16; g2.update(now); }
+      check(`${label}: the clock restarts once the ball is out`,
+            g2.sub === null || g2.sub.seconds < secondsAtStart,
+            g2.sub ? g2.sub.seconds.toFixed(2) : 'mode ended');
+
+      // And a hit still lands, which is what "hitting it does nothing" was.
+      if (g2.sub) {
+        const before = g2.sub.kind === 'evolution' ? g2.run.score : g2.sub.meter;
+        strike(g2);
+        g2.update(now += 16);
+        const after = g2.sub
+          ? (g2.sub.kind === 'evolution' ? g2.run.score : g2.sub.meter)
+          : null;
+        check(`${label}: hits count again`,
+              after === null || (g2.sub.kind === 'evolution' ? after > before : after < before),
+              `${before} -> ${after}`);
+      }
+    }
+
+    /* A genuinely lost ball still ends the mode. The save must not have turned
+       that off as a side effect. */
+    await store.startFresh();
+    const g3 = new Game({});
+    g3.start('Mystic');
+    g3.plungeRelease();
+    g3.run.encounterArmed = true;
+    g3._enterSaucer(g3.ball);
+    g3._lastNow = 995000;
+    g3._updateSaucer(995000);
+    check('a mode is running', g3.sub !== null);
+
+    g3.run.ballSaveFor = 0;
+    g3.ball.moveTo(50, LAYOUT.drainY + 3);
+    g3._checkDrain();
+    check('with no save left, the ball is lost', g3.phase === PHASE.BALL_LOST, g3.phase);
+    check('and the mode ended with it', g3.sub === null);
+    check('the creature collider was cleaned up',
+          !g3.world.colliders.some(c => c.meta?.role === 'creature'));
+    check('and the centre came back', g3.parts.gimmick.dormant === false);
+  }
+
   group('game: Evolution Mode signals the shard bank');
   {
     await store.startFresh();

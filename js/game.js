@@ -324,7 +324,8 @@ export class Game {
 
     this.ball.held = false;
     this.ball.setVel(0, -launchImpulse(pull));
-    this.phase = PHASE.PLAY;
+    // Back to whatever was running, which after a ball save mid-mode is not PLAY.
+    this.phase = this._playPhase();
 
     this._sound('plunge', { power: pull });
     this._emit('launch', { pull });
@@ -457,9 +458,26 @@ export class Game {
     this._handleEvents();
 
     if (this.phase === PHASE.SAUCER) this._updateSaucer(nowMs);
-    else if (this.phase === PHASE.ENCOUNTER) this._updateEncounter(dt);
-    else if (this.phase === PHASE.EVOLUTION) this._updateEvolution(dt);
-    else if (this.phase === PHASE.BOSS) this._updateBoss(dt);
+
+    /**
+     * The live mode is driven off `sub`, not off `phase`.
+     *
+     * This is the third bug of one kind: `phase` and `sub` are two records of
+     * the same fact and they drift, and whenever they do the mode is left alive
+     * but never updated again — creature frozen, clock frozen, hits ignored.
+     * First the Well's guard omitted EVOLUTION. Then a ball save fired mid-mode,
+     * set the phase to PLUNGE and orphaned the mode the same way, which is
+     * trivial to hit now that a capture hands out ten seconds of save: catch
+     * something, drain inside the save, and the next mode you start is dead.
+     *
+     * Dispatching on the sub-mode itself ends the whole class. There is no phase
+     * a mode can be hidden behind, because the phase is no longer asked.
+     */
+    if (this.sub) {
+      if (this.sub.kind === 'encounter') this._updateEncounter(dt);
+      else if (this.sub.kind === 'evolution') this._updateEvolution(dt);
+      else if (this.sub.kind === 'boss') this._updateBoss(dt);
+    }
 
     this._ballSearch(nowMs);
     this._checkDrain();
@@ -610,8 +628,9 @@ export class Game {
     this._award(SCORE.dropTarget);
     this._sound('target');
 
-    // During Evolution Mode the bank is the shard bank instead.
-    if (this.phase === PHASE.EVOLUTION && this.sub) {
+    // During Evolution Mode the bank is the shard bank instead. Keyed off the
+    // sub-mode, not the phase, for the reason given in update().
+    if (this.sub?.kind === 'evolution') {
       this.sub.shards = Math.min(EVOLUTION_SHARDS, this.sub.shards + 1);
       this._award(SCORE.evolveShard);
       this._emit('evolutionShard', { shards: this.sub.shards, needed: EVOLUTION_SHARDS });
@@ -1029,6 +1048,8 @@ export class Game {
 
     if (s.meter <= 0) { this._capture(); return; }
 
+    // The clock only runs while the ball is reachable. See _ballInPlay.
+    if (!this._ballInPlay()) return;
     s.seconds -= dt;
     if (s.seconds <= 0) this._escape('time');
   }
@@ -1170,6 +1191,7 @@ export class Game {
 
     if (!this.sub) return;      // _evolve cleared it
 
+    if (!this._ballInPlay()) return;
     s.seconds -= dt;
     if (s.seconds <= 0) this._evolutionFailed('time');
   }
@@ -1249,12 +1271,16 @@ export class Game {
     const s = this.sub;
     if (!s) return;
 
-    /* The shield is what stops a boss being one safe repeated shot. */
-    s.shieldTimer -= dt;
-    if (s.shieldTimer <= 0) {
-      s.shielded = !s.shielded;
-      s.shieldTimer = BOSS_SHIELD_SECONDS * (s.shielded ? 0.8 : 1.2);
-      this._emit('bossShield', { shielded: s.shielded });
+    /* The shield is what stops a boss being one safe repeated shot. It runs on
+       the same terms as the clock: not while the ball is out of reach, or the
+       player would come back from a ball save to a shield they never saw go up. */
+    if (this._ballInPlay()) {
+      s.shieldTimer -= dt;
+      if (s.shieldTimer <= 0) {
+        s.shielded = !s.shielded;
+        s.shieldTimer = BOSS_SHIELD_SECONDS * (s.shielded ? 0.8 : 1.2);
+        this._emit('bossShield', { shielded: s.shielded });
+      }
     }
 
     this._driftCreature(s, dt);
@@ -1278,6 +1304,7 @@ export class Game {
 
     if (s.meter <= 0) { this._bossWin(); return; }
 
+    if (!this._ballInPlay()) return;
     s.seconds -= dt;
     if (s.seconds <= 0) this._bossFled();
   }
@@ -1326,6 +1353,33 @@ export class Game {
   /* ---------------------------------------------------------------
      Rewards shared by all three modes
      --------------------------------------------------------------- */
+
+  /**
+   * The phase the game belongs in with the ball loose: the running mode's, or
+   * plain PLAY if nothing is running.
+   *
+   * Anywhere the ball is returned to play has to ask this rather than assume
+   * PLAY, or it silently ends a mode that is still very much alive.
+   */
+  _playPhase() {
+    if (!this.sub) return PHASE.PLAY;
+    if (this.sub.kind === 'encounter') return PHASE.ENCOUNTER;
+    if (this.sub.kind === 'evolution') return PHASE.EVOLUTION;
+    return PHASE.BOSS;
+  }
+
+  /**
+   * True while the player can actually reach the creature.
+   *
+   * A mode's clock is held whenever they cannot — held in the plunger after a
+   * ball save, most of all. Letting it run there would mean losing a creature
+   * to a ball that was saved, in a lane the player has to sit in, which is the
+   * opposite of what a save is for. Nothing is gained by stalling either: the
+   * only way to finish a mode is to put the ball back in play.
+   */
+  _ballInPlay() {
+    return !!this.ball && this.ball.alive && !this.ball.held;
+  }
 
   /**
    * The live shiny rate, doubled once the game passes SHINY_DOUBLE_AT.
@@ -1499,10 +1553,12 @@ export class Game {
       return;
     }
 
-    // Anything in progress ends with the ball.
-    if (this.phase === PHASE.ENCOUNTER) this._escape('drain');
-    else if (this.phase === PHASE.EVOLUTION) this._evolutionFailed('drain');
-    else if (this.phase === PHASE.BOSS) this._bossFled();
+    /* Anything in progress ends with the ball — and only with a ball genuinely
+       lost, which is why this sits below the save. Keyed off the sub-mode rather
+       than the phase for the same reason update() is. */
+    if (this.sub?.kind === 'encounter') this._escape('drain');
+    else if (this.sub?.kind === 'evolution') this._evolutionFailed('drain');
+    else if (this.sub?.kind === 'boss') this._bossFled();
 
     this.ball.alive = false;
     this.phase = PHASE.BALL_LOST;
