@@ -15,7 +15,10 @@
    ============================================================ */
 
 import { Persist, progressOf } from './persist.js';
-import { DB, TYPES, speciesById, effectiveRarityOf } from './data.js';
+import {
+  DB, TYPES, speciesById, effectiveRarityOf,
+  BASE_SET, SET_KEYS, bossOf, galacticRaritiesUnlocked, nextGalacticUnlock
+} from './data.js';
 
 export const SAVE_VERSION = 1;
 
@@ -83,6 +86,7 @@ export function blankSave() {
     ui: {
       lastMode: 'Neutral',
       collectionType: 'Neutral',
+      collectionSet: BASE_SET,
       collectionShiny: false
     }
   };
@@ -160,6 +164,7 @@ function migrate(raw) {
   if (raw.ui && typeof raw.ui === 'object') {
     if (TYPES.includes(raw.ui.lastMode)) s.ui.lastMode = raw.ui.lastMode;
     if (TYPES.includes(raw.ui.collectionType)) s.ui.collectionType = raw.ui.collectionType;
+    if (SET_KEYS.includes(raw.ui.collectionSet)) s.ui.collectionSet = raw.ui.collectionSet;
     s.ui.collectionShiny = !!raw.ui.collectionShiny;
   }
 
@@ -335,26 +340,69 @@ export const store = {
 
   /* ---------- counts for the Collection header ---------- */
 
-  registeredCount(type = null) {
+  registeredCount(type = null, setKey = null) {
     let n = 0;
     for (const sp of DB.species) {
       if (type && sp.type !== type) continue;
+      if (setKey && sp.setKey !== setKey) continue;
       if (this.s.registered[sp.id]) n++;
     }
     return n;
   },
 
-  shinyCount(type = null) {
+  shinyCount(type = null, setKey = null) {
     let n = 0;
     for (const sp of DB.species) {
       if (type && sp.type !== type) continue;
+      if (setKey && sp.setKey !== setKey) continue;
       if (this.s.shinyCaught[sp.id]) n++;
     }
     return n;
   },
 
-  speciesTotal(type = null) {
-    return type ? DB.species.filter(s => s.type === type).length : DB.species.length;
+  speciesTotal(type = null, setKey = null) {
+    return DB.species.filter(s =>
+      (!type || s.type === type) && (!setKey || s.setKey === setKey)).length;
+  },
+
+  /* ---------- unlocking Galactic Adventures ---------- */
+
+  /**
+   * Which Galactic rarities the player has earned.
+   *
+   * Counted from the base set only, which is the whole point of the ladder: the
+   * reward for finishing one Collection is the start of the next. Registering
+   * Galactic creatures must not help unlock further Galactic creatures, or the
+   * first tier would bootstrap all the rest.
+   */
+  galacticRarities() {
+    return galacticRaritiesUnlocked(this.registeredCount(null, BASE_SET));
+  },
+
+  /** The next tier and how far off it is, for the Collection header. */
+  galacticProgress() {
+    const have = this.registeredCount(null, BASE_SET);
+    const next = nextGalacticUnlock(have);
+    return {
+      registered: have,
+      total: this.speciesTotal(null, BASE_SET),
+      unlocked: galacticRaritiesUnlocked(have),
+      next,
+      needed: next ? next.registered - have : 0
+    };
+  },
+
+  /**
+   * True once this type's Galactic boss is available.
+   *
+   * Read as "have you captured this type's Elemental boss", which is literally
+   * the condition, rather than off the boss-win counter — a Galactic win also
+   * increments that counter, and keying on the thing that unlocks it rather than
+   * on a tally that both feed keeps the two from ever being confused.
+   */
+  galacticBossUnlocked(type) {
+    const base = bossOf(type);
+    return !!base && this.isRegistered(base.id);
   },
 
   /** 0..1 across the whole set, for the profile ring. */

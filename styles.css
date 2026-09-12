@@ -372,6 +372,58 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
    Collection
    --------------------------------------------------------------- */
 
+/* Which creature set. Above the type tabs, because it is the wider choice. */
+.set-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.set-tab {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 9px;
+  padding: 6px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.set-tab b { font-size: 11px; }
+.set-tab small { color: var(--muted); font-size: 9.5px; font-variant-numeric: tabular-nums; }
+.set-tab.active { background: var(--panel-2); border-color: var(--r4); }
+
+/* The unlock ladder, on the set it gates. */
+.gate-note {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+.gate-note p { margin: 0 0 6px; }
+.gate-note p:last-child { margin: 6px 0 0; }
+.gate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+.gate-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: baseline;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 3px 7px;
+  font-size: 10px;
+}
+.gate-list li.open { border-color: var(--r2); }
+.gate-list li.open b { color: var(--r2); }
+.gate-list li.shut { opacity: .62; }
+
 .type-tabs {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -467,6 +519,23 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
 .cell.shiny { border-color: var(--r5); }
 .cell.legendary { border-color: rgba(255, 204, 77, .45); }
 .shiny-star { position: absolute; bottom: 22px; right: 6px; color: var(--r5); font-size: 11px; }
+
+/* Sealed: it cannot appear yet, which is a different thing from not having
+   found it. Dimmer, dashed, and carrying a padlock so the two never read alike. */
+.cell.sealed { border-style: dashed; opacity: .5; }
+.cell.sealed img { filter: brightness(0) opacity(.25); }
+.seal { position: absolute; top: 5px; right: 5px; font-size: 10px; opacity: .8; }
+.boss-chip.sealed { border-style: dashed; opacity: .6; }
+.sp-seal {
+  margin: 6px 0 0;
+  color: var(--muted);
+  border-left: 2px solid var(--r4);
+  padding-left: 7px;
+}
+.boss-set { margin-top: 8px; }
+.boss-set > span { display: block; margin-bottom: 4px; }
+.boss-cell.sealed { border-style: dashed; opacity: .55; }
+.boss-cell.sealed img { filter: brightness(0) opacity(.3); }
 
 /* ---------------------------------------------------------------
    Species sheet

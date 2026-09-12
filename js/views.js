@@ -18,7 +18,8 @@ import {
   EVOLUTION_SECONDS, BOSS_SECONDS, BALLS_PER_GAME, BALL_SAVE_SECONDS,
   CAPTURE_BALL_SAVE_SECONDS, SHINY_DOUBLE_AT,
   EXTRA_BALL_AT, MAX_MULTIPLIER, SHINY_ODDS, SCORE,
-  speciesById, lineagePath, evolutionTargets, bossOf, speciesOfType
+  speciesById, lineagePath, evolutionTargets, bossOf, bossOfSet, speciesOfType,
+  SETS, SET_KEYS, BASE_SET, GALACTIC_UNLOCKS
 } from './data.js';
 
 import { SPINS_PER_SHIFT } from './game.js';
@@ -48,7 +49,7 @@ const typeTag = type => el('span', { class: `tag t-${type}`, text: type });
  *   not registered        silhouette, name and type hidden
  *   shiny mode, no shiny  silhouette of the *shiny* art
  */
-function collectionCell(sp, { shinyMode, onOpen }) {
+function collectionCell(sp, { shinyMode, onOpen, sealed = false }) {
   const known = store.isRegistered(sp.id);
   const gotShiny = store.hasShiny(sp.id);
   const got = shinyMode ? gotShiny : known;
@@ -58,6 +59,9 @@ function collectionCell(sp, { shinyMode, onOpen }) {
   if (shinyMode) classes.push(got ? 'shiny' : 'shadow');
   else if (!known) classes.push('locked');
   if (isBoss) classes.push('legendary');
+  /* Sealed is not the same as unregistered, and conflating them would be a lie:
+     one means "you have not found it yet", the other "it cannot appear yet". */
+  if (sealed && !known) classes.push('sealed');
 
   const img = el('img', {
     src: shinyMode ? sp.shinyPath : sp.imagePath,
@@ -79,6 +83,7 @@ function collectionCell(sp, { shinyMode, onOpen }) {
   },
     rarityPip(sp.effectiveRarity),
     shinyMode && got ? el('span', { class: 'shiny-star', text: '\u2605' }) : null,
+    sealed && !known ? el('span', { class: 'seal', text: '\u{1f512}' }) : null,
     img,
     el('span', { class: 'nm', text: known ? sp.name : '???' }),
     el('span', { class: `sub ${got ? 't-' + sp.type : ''}`, text: got ? sp.type : (known ? sp.type : '???') }),
@@ -102,12 +107,35 @@ export function renderCollection() {
   if (!body) return;
 
   const type = TYPES.includes(store.s.ui.collectionType) ? store.s.ui.collectionType : 'Neutral';
+  const setKey = SET_KEYS.includes(store.s.ui.collectionSet) ? store.s.ui.collectionSet : BASE_SET;
   const shinyMode = !!store.s.ui.collectionShiny;
   const mode = MODES[type];
+  const set = SETS[setKey];
 
-  const list = speciesOfType(type);
+  const list = speciesOfType(type, setKey);
   const total = list.length;
-  const have = shinyMode ? store.shinyCount(type) : store.registeredCount(type);
+  const have = shinyMode ? store.shinyCount(type, setKey) : store.registeredCount(type, setKey);
+
+  /* Which Galactic rarities are reachable. The base set has no gates. */
+  const openRarities = new Set(store.galacticRarities());
+  const sealedFor = sp => sp.setKey !== BASE_SET && !openRarities.has(sp.effectiveRarity);
+
+  /* ---- set tabs ---- */
+  const setTabs = el('div', { class: 'set-tabs' },
+    SET_KEYS.map(k => {
+      const s = SETS[k];
+      const done = shinyMode ? store.shinyCount(null, k) : store.registeredCount(null, k);
+      const all = store.speciesTotal(null, k);
+      return el('button', {
+        class: `set-tab${k === setKey ? ' active' : ''}`,
+        type: 'button',
+        onclick: () => { store.setUi('collectionSet', k); renderCollection(); }
+      },
+        el('b', { text: s.name }),
+        el('small', { text: `${done}/${all}` })
+      );
+    })
+  );
 
   /* ---- type tabs ---- */
   const tabs = el('div', { class: 'type-tabs' },
@@ -117,15 +145,56 @@ export function renderCollection() {
       onclick: () => { store.setUi('collectionType', t); renderCollection(); }
     },
       el('b', { text: t }),
-      el('small', { text: `${shinyMode ? store.shinyCount(t) : store.registeredCount(t)}/${store.speciesTotal(t)}` })
+      el('small', {
+        text: `${shinyMode ? store.shinyCount(t, setKey) : store.registeredCount(t, setKey)}` +
+              `/${store.speciesTotal(t, setKey)}`
+      })
     ))
   );
+
+  /**
+   * The unlock ladder, shown only on the set it gates.
+   *
+   * Spelled out rather than left as a locked grid to work out, because the whole
+   * point of the ladder is that it tells you what to go and do next.
+   */
+  const gateNote = setKey === BASE_SET ? null : (() => {
+    const p = store.galacticProgress();
+    const rows = GALACTIC_UNLOCKS.map(g => el('li', {
+      class: p.unlocked.includes(g.rarity) ? 'open' : 'shut'
+    },
+      el('b', { text: RARITY_NAMES[g.rarity] }),
+      el('span', {
+        class: 'muted small',
+        text: p.unlocked.includes(g.rarity)
+          ? 'unlocked'
+          : `${g.registered} Awakening creatures`
+      })
+    ));
+
+    return el('div', { class: 'gate-note' },
+      el('p', { class: 'small' },
+        el('b', { text: `${p.registered} / ${p.total}` }),
+        el('span', {
+          class: 'muted',
+          text: p.next
+            ? ` Elemental Awakening registered \u2014 ${p.needed} more to unlock ` +
+              `${RARITY_NAMES[p.next.rarity]} Galactic creatures.`
+            : ' Elemental Awakening registered \u2014 every Galactic tier is open.'
+        })
+      ),
+      el('ul', { class: 'gate-list' }, rows),
+      el('p', { class: 'muted small', text:
+        'Legendaries are separate: beat a type\u2019s Awakening legendary and its ' +
+        'Galactic one joins the gate, at even odds with the first.' })
+    );
+  })();
 
   /* ---- header ---- */
   const head = el('div', { class: 'collection-head' },
     el('div', { class: 'ch-title' },
       el('h3', { text: mode.name, style: { color: mode.colour } }),
-      el('p', { class: 'muted small', text: mode.blurb })
+      el('p', { class: 'muted small', text: `${set.name} \u00b7 ${mode.blurb}` })
     ),
     el('div', { class: 'ch-right' },
       el('span', { class: 'count', text: `${have} / ${total}${shinyMode ? ' shiny' : ''}` }),
@@ -146,20 +215,28 @@ export function renderCollection() {
   );
 
   /* ---- the boss, called out ---- */
-  const boss = bossOf(type);
+  const boss = bossOfSet(setKey, type);
+  const bossLocked = setKey !== BASE_SET && !store.galacticBossUnlocked(type);
+  const bossKnown = boss ? store.isRegistered(boss.id) : false;
+
   const bossRow = boss ? el('div', { class: 'boss-row' },
     el('span', { class: 'muted small', text: 'Awakening Gate' }),
     el('button', {
-      class: `boss-chip${store.isRegistered(boss.id) ? ' got' : ''}`,
+      class: `boss-chip${bossKnown ? ' got' : ''}${bossLocked && !bossKnown ? ' sealed' : ''}`,
       type: 'button',
       onclick: () => openSpecies(boss)
     },
       el('img', { src: boss.imagePath, alt: '', loading: 'lazy' }),
-      el('b', { text: store.isRegistered(boss.id) ? boss.name : '???' }),
-      store.bossWins(type) > 0
-        ? el('small', { text: `beaten ${store.bossWins(type)}\u00d7` })
-        : el('small', { class: 'muted', text: 'not beaten' })
-    )
+      el('b', { text: bossKnown ? boss.name : '???' }),
+      bossKnown
+        ? el('small', { text: `registered` })
+        : bossLocked
+          ? el('small', { class: 'muted', text: `beat ${bossOf(type)?.name || 'the Awakening boss'} first` })
+          : el('small', { class: 'muted', text: 'not beaten' })
+    ),
+    setKey === BASE_SET && store.bossWins(type) > 0
+      ? el('small', { class: 'muted', text: `${store.bossWins(type)} gate win${store.bossWins(type) === 1 ? '' : 's'}` })
+      : null
   ) : null;
 
   /* ---- the grid, grouped by stage so lines read top to bottom ---- */
@@ -167,10 +244,10 @@ export function renderCollection() {
     list
       .slice()
       .sort((a, b) => (a.stage - b.stage) || (a.order - b.order))
-      .map(sp => collectionCell(sp, { shinyMode, onOpen: openSpecies }))
+      .map(sp => collectionCell(sp, { shinyMode, onOpen: openSpecies, sealed: sealedFor(sp) }))
   );
 
-  fill(body, tabs, head, bar, bossRow, grid);
+  fill(body, setTabs, tabs, head, bar, gateNote, bossRow, grid);
 }
 
 /* ---------------------------------------------------------------
@@ -180,6 +257,37 @@ export function renderCollection() {
 export function openSpecies(sp) {
   renderSpeciesSheet(sp);
   openSheet('sheet-species');
+}
+
+/**
+ * Why a creature cannot appear yet, on its own sheet.
+ *
+ * Shown here rather than only as a padlock in the grid, because the padlock says
+ * "not yet" and this says what to go and do about it. Nothing at all for the base
+ * set, or for anything already registered — a creature you have caught is not
+ * locked, whatever the ladder says.
+ */
+function sealNote(sp) {
+  if (!sp || sp.setKey === BASE_SET || store.isRegistered(sp.id)) return null;
+
+  if (sp.effectiveRarity === 5) {
+    const base = bossOf(sp.type);
+    if (store.galacticBossUnlocked(sp.type)) return null;
+    return el('p', { class: 'sp-seal small' },
+      `\u{1f512} Beat ${base ? base.name : 'this type\u2019s Awakening legendary'} at the ` +
+      'Awakening Gate and this joins that gate alongside it.');
+  }
+
+  const p = store.galacticProgress();
+  if (p.unlocked.includes(sp.effectiveRarity)) return null;
+
+  const tier = GALACTIC_UNLOCKS.find(g => g.rarity === sp.effectiveRarity);
+  if (!tier) return null;
+
+  return el('p', { class: 'sp-seal small' },
+    `\u{1f512} ${RARITY_NAMES[tier.rarity]} Galactic creatures unlock at ` +
+    `${tier.registered} Elemental Awakening creatures registered. ` +
+    `You have ${p.registered}.`);
 }
 
 /**
@@ -208,9 +316,11 @@ export function renderSpeciesSheet(sp) {
         typeTag(sp.type),
         el('span', { class: 'tag', text: sp.stageLabel }),
         el('span', { class: `tag r-${sp.effectiveRarity}`, text: RARITY_NAMES[sp.effectiveRarity] }),
+        el('span', { class: 'tag', text: SETS[sp.setKey]?.short || sp.setKey }),
         isBoss ? el('span', { class: 'tag legend', text: '\u2726 Gate boss' }) : null,
         shiny ? el('span', { class: 'tag shiny', text: '\u2605 Shiny' }) : null
       ),
+      sealNote(sp),
       el('div', { class: 'sp-counts' },
         el('span', {}, el('b', { text: String(store.timesCaught(sp.id)) }), ' caught'),
         el('span', {}, el('b', { text: String(store.timesEvolved(sp.id)) }), ' evolved')
@@ -369,20 +479,35 @@ export function renderProfile() {
     ))
   );
 
-  /* ---- per-mode boss progress ---- */
-  const bosses = el('div', { class: 'card' },
-    el('h4', { text: 'Awakening Gate' }),
+  /**
+   * Boss progress, one row per set.
+   *
+   * Both rows, because the second is the reward for finishing the first: seeing
+   * the sealed Galactic row is how you learn there is one.
+   */
+  const bossRows = SET_KEYS.map(key => el('div', { class: 'boss-set' },
+    el('span', { class: 'muted small', text: SETS[key].name }),
     el('div', { class: 'boss-grid' },
       TYPES.map(t => {
-        const b = bossOf(t);
-        const wins = store.bossWins(t);
-        return el('div', { class: `boss-cell${wins ? ' got' : ''}` },
+        const b = bossOfSet(key, t);
+        const known = b ? store.isRegistered(b.id) : false;
+        const sealed = key !== BASE_SET && !store.galacticBossUnlocked(t);
+        const cls = `boss-cell${known ? ' got' : ''}${sealed && !known ? ' sealed' : ''}`;
+        return el('div', { class: cls },
           b ? el('img', { src: b.imagePath, alt: '', loading: 'lazy' }) : null,
-          el('small', { text: b ? (store.isRegistered(b.id) ? b.name : '???') : '\u2014' }),
-          el('span', { class: 'muted small', text: wins ? `${wins}\u00d7` : t })
+          el('small', { text: b ? (known ? b.name : '???') : '\u2014' }),
+          el('span', { class: 'muted small', text: known ? '\u2713' : t })
         );
       })
     )
+  ));
+
+  const bosses = el('div', { class: 'card' },
+    el('h4', { text: 'Awakening Gate' }),
+    bossRows,
+    el('p', { class: 'muted small', text:
+      'Beat a type\u2019s Awakening legendary and its Galactic one joins that ' +
+      'gate, at even odds with the first.' })
   );
 
   fill(body, ring, stats, bosses, renderSettingsCard(), renderSaveCard());
@@ -807,10 +932,17 @@ export function renderGuide() {
     fmtScore(SCORE.captureRarity[r])
   ]);
 
+  /* Pool sizes are counted per set, because until Galactic is unlocked only the
+     first number is what the player will actually meet. */
   const modeRows = TYPES.map(t => {
     const pool = DB.pools.get(t) || {};
-    const counts = [1, 2, 3, 4].map(r => (pool[r] || []).length).join(' / ');
-    return [MODES[t].name, t, counts, bossOf(t)?.name || '\u2014'];
+    const countFor = key => [1, 2, 3, 4]
+      .map(r => (pool[r] || []).filter(s => s.setKey === key).length).join('/');
+    return [
+      MODES[t].name, t,
+      countFor('ea'), countFor('ga'),
+      [bossOf(t)?.name, bossOfSet('ga', t)?.name].filter(Boolean).join(' / ') || '\u2014'
+    ];
   });
 
   fill(body,
@@ -896,10 +1028,24 @@ export function renderGuide() {
       ])
     ),
 
+    /* ============ SETS ============ */
+    section('Two sets of creatures',
+      para(`There are ${DB.species.length} creatures in the game, in two sets. Elemental Awakening (${store.speciesTotal(null, 'ea')}) is available from the start. Galactic Adventures (${store.speciesTotal(null, 'ga')}) is earned with it, one rarity at a time.`),
+      table(['Unlocks', 'Awakening creatures registered'],
+        GALACTIC_UNLOCKS.map(g => [`${RARITY_NAMES[g.rarity]} Galactic creatures`, String(g.registered)])),
+      defs([
+        ['Registered, not caught', 'It counts the creatures in your Collection, so evolving something counts just as much as catching it. Registering Galactic creatures does not help \u2014 only Awakening ones move the ladder.'],
+        ['What unlocking does', 'Those creatures join the same rarity pool as their Awakening counterparts. It does not make rare creatures more common; it makes them more varied.'],
+        ['Legendaries', 'Separate from the ladder. Beat a type\u2019s Awakening legendary and that type\u2019s Galactic legendary joins its gate. From then on the gate picks between the two at even odds, so the first one is still worth fighting.'],
+        ['Already on your device', 'Every picture for both sets is stored the first time you open the game, so an unlock works straight away even with no connection.'],
+        ['Where to look', 'The Collection has a tab per set. A creature you have not unlocked yet shows with a padlock, which is different from one you simply have not found.']
+      ])
+    ),
+
     /* ============ THE FIVE TABLES ============ */
     section('The five tables',
       para('Every table shares the same flippers, drain, lanes, bumpers, ramps and Well, so they all handle the same way. Only the centre changes \u2014 and which creatures you can find.'),
-      table(['Table', 'Type', 'Pool by rarity 1/2/3/4', 'Gate boss'], modeRows),
+      table(['Table', 'Type', 'Awakening 1/2/3/4', 'Galactic 1/2/3/4', 'Gate legendaries'], modeRows),
       defs([
         ['Wildwood Green', 'The gentle one. Three herd lanes to sweep, two stumps flanking a wide open shot up the middle to the Well. Six of its ten catchables are Common, which makes it the place to start.'],
         ['Rune Sanctum', 'A horseshoe ring around a spinning rune disc. Feed the ball in from below and the disc bats it around; the more you work the spinner, the faster the disc turns.'],

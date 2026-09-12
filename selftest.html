@@ -41,7 +41,10 @@ import {
   familyMembers, effectiveRarityOf, parseCSV, CAPTURE_METER, DISC_TIERS,
   MAX_DISC_TIER, MAX_MULTIPLIER, GATE_CATCHES_NEEDED, EVOLUTION_SHARDS,
   EXTRA_BALL_AT, SCORE, BALLS_PER_GAME,
-  CAPTURE_BALL_SAVE_SECONDS, SHINY_ODDS, SHINY_DOUBLE_AT
+  CAPTURE_BALL_SAVE_SECONDS, SHINY_ODDS, SHINY_DOUBLE_AT,
+  SETS, SET_KEYS, BASE_SET, GALACTIC_UNLOCKS, GALACTIC_BOSS_ODDS,
+  speciesOfSet, speciesOfType, bossOfSet, galacticBossOf, bossChoicesFor,
+  galacticRaritiesUnlocked, nextGalacticUnlock, evolutionTargets
 } from './js/data.js';
 
 import {
@@ -115,9 +118,22 @@ async function run() {
   group('loadDatabase');
   await loadDatabase();
 
-  check('79 species loaded', DB.species.length === 79, `got ${DB.species.length}`);
+  check('156 species loaded across both sets', DB.species.length === 156, `got ${DB.species.length}`);
+  check('79 from Elemental Awakening', speciesOfSet('ea').length === 79, `got ${speciesOfSet('ea').length}`);
+  check('77 from Galactic Adventures', speciesOfSet('ga').length === 77, `got ${speciesOfSet('ga').length}`);
   check('every type key has a mode', TYPES.every(t => MODES[t] && MODES[t].type === t));
   check('no rarity 5 in RARITY_WEIGHTS', !(5 in RARITY_WEIGHTS));
+
+  /* Sets must not interleave, or the Collection reads as one shuffled dex. */
+  {
+    const first = DB.species.findIndex(s => s.setKey === 'ga');
+    const last = DB.species.map(s => s.setKey).lastIndexOf('ea');
+    check('the sets do not interleave', first > last, `first ga=${first}, last ea=${last}`);
+    check('ids are unique across sets', new Set(DB.species.map(s => s.id)).size === DB.species.length);
+    check('names are unique across sets',
+          new Set(DB.species.map(s => s.name.toLowerCase())).size === DB.species.length);
+    check('every species carries its set', DB.species.every(s => SET_KEYS.includes(s.setKey)));
+  }
 
   if (DB.warnings.length) {
     note(`data warnings (${DB.warnings.length}):`);
@@ -127,40 +143,81 @@ async function run() {
   }
 
   group('species per type');
-  for (const [t, n] of Object.entries({ Mystic: 17, Neutral: 16, Mechanic: 16, Wind: 15, Celestial: 15 })) {
-    const got = DB.species.filter(s => s.type === t).length;
-    check(`${t} has ${n} species`, got === n, `got ${got}`);
+  {
+    for (const [t, n] of Object.entries({ Mystic: 17, Neutral: 16, Mechanic: 16, Wind: 15, Celestial: 15 })) {
+      const got = speciesOfType(t, 'ea').length;
+      check(`${t} has ${n} Awakening species`, got === n, `got ${got}`);
+    }
+    for (const [t, n] of Object.entries({ Neutral: 19, Celestial: 17, Mystic: 14, Mechanic: 14, Wind: 13 })) {
+      const got = speciesOfType(t, 'ga').length;
+      check(`${t} has ${n} Galactic species`, got === n, `got ${got}`);
+    }
+    check('every type has creatures in both sets',
+          TYPES.every(t => speciesOfType(t, 'ea').length && speciesOfType(t, 'ga').length));
   }
 
   group('catchable split');
   {
-    const catchable = DB.species.filter(s => s.isCatchable);
     const bosses = DB.species.filter(s => s.isBoss);
-    const evoOnly = DB.species.filter(s => s.stage > 1);
-    check('37 creatures are evolution-only', evoOnly.length === 37, `got ${evoOnly.length}`);
-    check('5 bosses, one per mode', bosses.length === 5, `got ${bosses.length}: ${bosses.map(b => b.name).join(', ')}`);
-    // 42 stage-1 rows, less all five bosses: the three that are rarity 5 in
-    // the CSV and the two promoted by BOSS_OVERRIDES.
-    check('37 catchable in Encounter Mode', catchable.length === 37, `got ${catchable.length}`);
-    check('catchable + bosses = every stage 1', catchable.length + bosses.length === 42,
-          `${catchable.length} + ${bosses.length}`);
-    check('every stage-1 row carries a rarity',
-          DB.species.filter(s => s.stage === 1).every(s => s.rarity >= 1 && s.rarity <= 5));
+    check('10 bosses, one per mode per set', bosses.length === 10,
+          `got ${bosses.length}: ${bosses.map(b => b.name).join(', ')}`);
+
+    for (const [key, stage1, evoOnly] of [['ea', 42, 37], ['ga', 40, 37]]) {
+      const mine = speciesOfSet(key);
+      const s1 = mine.filter(s => s.stage === 1);
+      const catchable = mine.filter(s => s.isCatchable);
+      const setBosses = mine.filter(s => s.isBoss);
+      check(`${key}: ${stage1} first stages`, s1.length === stage1, `got ${s1.length}`);
+      check(`${key}: ${evoOnly} are evolution-only`,
+            mine.filter(s => s.stage > 1).length === evoOnly,
+            `got ${mine.filter(s => s.stage > 1).length}`);
+      check(`${key}: 5 bosses`, setBosses.length === 5, `got ${setBosses.length}`);
+      check(`${key}: catchable + bosses = every first stage`,
+            catchable.length + setBosses.length === stage1,
+            `${catchable.length} + ${setBosses.length}`);
+      check(`${key}: every first stage carries a rarity`,
+            s1.every(s => s.rarity >= 1 && s.rarity <= 5));
+    }
   }
 
   group('bosses');
   {
     const expected = {
-      Mystic: 'Pheonyx', Wind: 'Pyrosora', Mechanic: 'Envoye',
-      Neutral: BOSS_OVERRIDES.Neutral, Celestial: BOSS_OVERRIDES.Celestial
+      ea: {
+        Mystic: 'Pheonyx', Wind: 'Pyrosora', Mechanic: 'Envoye',
+        Neutral: BOSS_OVERRIDES.ea.Neutral, Celestial: BOSS_OVERRIDES.ea.Celestial
+      },
+      ga: {
+        Mystic: 'Pantheraura', Wind: 'Electrogriff', Celestial: 'Starraffe',
+        Mechanic: 'Metalmagma', Neutral: BOSS_OVERRIDES.ga.Neutral
+      }
     };
-    for (const [t, name] of Object.entries(expected)) {
-      const b = bossOf(t);
-      check(`${t} boss is ${name}`, !!b && b.name === name, b ? b.name : 'none');
-      if (b) check(`  ${name} reports rarity 5`, b.effectiveRarity === 5, String(b.effectiveRarity));
+
+    for (const key of SET_KEYS) {
+      for (const [t, name] of Object.entries(expected[key])) {
+        const b = bossOfSet(key, t);
+        check(`${key} ${t} boss is ${name}`, !!b && b.name === name, b ? b.name : 'none');
+        if (b) {
+          check(`  ${name} reports rarity 5`, b.effectiveRarity === 5, String(b.effectiveRarity));
+          check(`  ${name} is in the ${key} set`, b.setKey === key, b.setKey);
+        }
+      }
     }
+
+    check('bossOf returns the base set', bossOf('Mystic')?.name === 'Pheonyx', bossOf('Mystic')?.name);
+    check('galacticBossOf returns the other', galacticBossOf('Mystic')?.name === 'Pantheraura',
+          galacticBossOf('Mystic')?.name);
     check('Alpakina flagged as promoted', bossOf('Neutral')?.promotedBoss === true);
+    check('Goggly flagged as promoted', galacticBossOf('Neutral')?.promotedBoss === true);
     check('Pheonyx not flagged as promoted', bossOf('Mystic')?.promotedBoss === false);
+    check('Pantheraura not flagged as promoted', galacticBossOf('Mystic')?.promotedBoss === false);
+
+    // The two bosses of a type must be different creatures, or the gate has one.
+    for (const t of TYPES) {
+      check(`${t}'s two legendaries are different`,
+            bossOf(t)?.id !== galacticBossOf(t)?.id,
+            `${bossOf(t)?.name} / ${galacticBossOf(t)?.name}`);
+    }
   }
 
   group('encounter pools');
@@ -168,23 +225,34 @@ async function run() {
     for (const t of TYPES) {
       const pool = DB.pools.get(t);
       const flat = Object.values(pool).flat();
-      const boss = bossOf(t);
-      check(`${t} pool excludes its boss`, !flat.some(s => s.id === boss?.id),
-            flat.filter(s => s.id === boss?.id).map(s => s.name).join(','));
+      const bossIds = SET_KEYS.map(k => bossOfSet(k, t)?.id).filter(Boolean);
+      check(`${t} pool excludes both its bosses`, !flat.some(s => bossIds.includes(s.id)),
+            flat.filter(s => bossIds.includes(s.id)).map(s => s.name).join(','));
       check(`${t} pool is all stage 1`, flat.every(s => s.stage === 1));
-      note(`${t}: ` + [1, 2, 3, 4].map(r => `r${r}=${pool[r].length}`).join(' ') +
-           `  boss=${boss ? boss.name : 'none'}`);
+      note(`${t}: ` + [1, 2, 3, 4].map(r => {
+        const ea = pool[r].filter(s => s.setKey === 'ea').length;
+        const ga = pool[r].filter(s => s.setKey === 'ga').length;
+        return `r${r}=${ea}+${ga}`;
+      }).join(' ') + `  bosses=${bossIds.length}`);
     }
 
     const neutral = DB.pools.get('Neutral');
-    check('Neutral r4 keeps Dewmo only', neutral[4].length === 1 && neutral[4][0].name === 'Dewmo',
+    check('Neutral r4 keeps Dewmo only',
+          neutral[4].length === 1 && neutral[4][0].name === 'Dewmo',
           neutral[4].map(s => s.name).join(','));
-    check('Celestial r4 is now empty', DB.pools.get('Celestial')[4].length === 0,
-          DB.pools.get('Celestial')[4].map(s => s.name).join(','));
+    check('Celestial r4 has only its Galactic Epic',
+          DB.pools.get('Celestial')[4].every(s => s.setKey === 'ga'),
+          DB.pools.get('Celestial')[4].map(s => `${s.name}:${s.setKey}`).join(','));
+
+    /* Galactic Neutral has no Epic at all, which is a fact about the source data
+       and worth stating rather than discovering as an empty tier later. */
+    check('Galactic Neutral has no Epic',
+          neutral[4].filter(s => s.setKey === 'ga').length === 0);
   }
 
   group('rollEncounter');
   {
+    /* With nothing unlocked, only the base set may ever appear. */
     for (const t of TYPES) {
       let bad = 0;
       const seen = new Set();
@@ -192,16 +260,120 @@ async function run() {
         const sp = rollEncounter(t);
         if (!sp) { bad++; continue; }
         seen.add(sp.id);
-        if (sp.type !== t || sp.stage !== 1 || sp.effectiveRarity === 5) { bad = -1; break; }
+        if (sp.type !== t || sp.stage !== 1 || sp.effectiveRarity === 5 || sp.setKey !== 'ea') {
+          bad = -1; break;
+        }
       }
-      check(`${t} rolls only valid catchables`, bad === 0, `bad=${bad}`);
-      const poolSize = Object.values(DB.pools.get(t)).flat().length;
-      check(`${t} reaches every creature in its pool`, seen.size === poolSize, `${seen.size}/${poolSize}`);
+      check(`${t} rolls only unlocked catchables`, bad === 0, `bad=${bad}`);
+      const poolSize = Object.values(DB.pools.get(t)).flat().filter(s => s.setKey === 'ea').length;
+      check(`${t} reaches every Awakening creature in its pool`, seen.size === poolSize,
+            `${seen.size}/${poolSize}`);
     }
 
     const minR = [];
     for (let i = 0; i < 500; i++) { const s = rollEncounter('Mechanic', { minRarity: 3 }); if (s) minR.push(s.effectiveRarity); }
     check('minRarity floor respected', minR.length > 0 && minR.every(r => r >= 3));
+  }
+
+  /**
+   * The unlock ladder.
+   *
+   * Gated on registered Elemental Awakening creatures. The important properties
+   * are that a locked tier can never be rolled, that unlocking one tier does not
+   * leak the others, and that unlocking changes variety rather than rarity.
+   */
+  group('galactic unlocks');
+  {
+    check('nothing is unlocked at zero', galacticRaritiesUnlocked(0).length === 0);
+    check('nothing at 49', galacticRaritiesUnlocked(49).length === 0);
+    check('Common at 50', galacticRaritiesUnlocked(50).join() === '1');
+    check('still only Common at 59', galacticRaritiesUnlocked(59).join() === '1');
+    check('Uncommon at 60', galacticRaritiesUnlocked(60).join() === '1,2');
+    check('Rare at 65', galacticRaritiesUnlocked(65).join() === '1,2,3');
+    check('Epic at 70', galacticRaritiesUnlocked(70).join() === '1,2,3,4');
+    check('and no more past the top', galacticRaritiesUnlocked(200).join() === '1,2,3,4');
+
+    check('next unlock at 0 is Common at 50', nextGalacticUnlock(0)?.registered === 50);
+    check('next unlock at 55 is Uncommon at 60', nextGalacticUnlock(55)?.rarity === 2);
+    check('nothing left to unlock at 70', nextGalacticUnlock(70) === null);
+
+    /* A locked tier must be unreachable, and an open one reachable. */
+    for (const tier of [1, 2, 3, 4]) {
+      const open = [tier];
+      const seen = new Set();
+      for (const t of TYPES) {
+        for (let i = 0; i < 4000; i++) {
+          const sp = rollEncounter(t, { galacticRarities: open });
+          if (sp?.setKey === 'ga') seen.add(sp.effectiveRarity);
+        }
+      }
+      const leaked = [...seen].filter(r => r !== tier);
+      check(`unlocking rarity ${tier} leaks no other tier`, leaked.length === 0, leaked.join(','));
+    }
+
+    /* Every Galactic creature becomes reachable with everything open. */
+    {
+      const all = [1, 2, 3, 4];
+      const seen = new Set();
+      for (const t of TYPES) {
+        for (let i = 0; i < 20000; i++) {
+          const sp = rollEncounter(t, { galacticRarities: all });
+          if (sp) seen.add(sp.id);
+        }
+      }
+      const want = DB.species.filter(s => s.isCatchable && s.rarity && s.stage === 1);
+      const missed = want.filter(s => !seen.has(s.id));
+      check('with everything open, every catchable is reachable', missed.length === 0,
+            missed.map(s => `${s.name}:${s.setKey}`).slice(0, 8).join(','));
+      note(`${seen.size} distinct catchables rolled of ${want.length}`);
+    }
+
+    /* Unlocking must not change how often each rarity appears — only which
+       creatures fill it. That is the whole design claim of the ladder. */
+    {
+      const share = open => {
+        const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+        let n = 0;
+        for (let i = 0; i < 40000; i++) {
+          const sp = rollEncounter('Mystic', { galacticRarities: open });
+          if (!sp) continue;
+          counts[sp.effectiveRarity]++; n++;
+        }
+        return [1, 2, 3, 4].map(r => counts[r] / n);
+      };
+      const before = share([]);
+      const after = share([1, 2, 3, 4]);
+      const drift = Math.max(...before.map((v, i) => Math.abs(v - after[i])));
+      check('unlocking does not shift the rarity mix', drift < 0.04, drift.toFixed(3));
+      note('Mystic rarity share locked  ' + before.map(v => v.toFixed(3)).join(' '));
+      note('Mystic rarity share open    ' + after.map(v => v.toFixed(3)).join(' '));
+    }
+
+    /* Evolved Galactic forms follow their family's rarity, so evolving something
+       you were allowed to catch is never blocked. */
+    {
+      const psybella = speciesByName('Psybella');          // ga, rarity 3
+      const fuschioria = speciesByName('Fuschioria');       // its stage 2
+      check('a Galactic evolution inherits the family rarity',
+            fuschioria.effectiveRarity === psybella.effectiveRarity,
+            `${fuschioria.effectiveRarity} vs ${psybella.effectiveRarity}`);
+      check('and evolutionTargets does not gate it',
+            evolutionTargets(psybella.id).some(s => s.id === fuschioria.id));
+    }
+  }
+
+  group('galactic bosses');
+  {
+    for (const t of TYPES) {
+      const locked = bossChoicesFor(t, { galacticUnlocked: false });
+      const open = bossChoicesFor(t, { galacticUnlocked: true });
+      check(`${t}: locked, the gate offers one boss`, locked.length === 1, String(locked.length));
+      check(`${t}: and it is the Awakening one`, locked[0]?.setKey === 'ea', locked[0]?.setKey);
+      check(`${t}: unlocked, the gate offers two`, open.length === 2, String(open.length));
+      check(`${t}: one from each set`,
+            open.map(b => b.setKey).sort().join() === 'ea,ga',
+            open.map(b => b.setKey).join());
+    }
   }
 
   group('evolution graph');
@@ -305,6 +477,67 @@ async function run() {
 
     await store.reset();
     check('reset clears the dex', store.registeredCount() === 0 && store.s.stats.games === 0);
+  }
+
+  /**
+   * The save side of the unlock ladder.
+   *
+   * The property that matters most: registering Galactic creatures must not move
+   * the ladder. If it did, the first tier would bootstrap all the rest and the
+   * gate would collapse the moment it opened.
+   */
+  group('state: sets and the unlock ladder');
+  {
+    await store.startFresh();
+
+    const ea = speciesOfSet('ea');
+    const ga = speciesOfSet('ga');
+
+    check('nothing unlocked on a fresh save', store.galacticRarities().length === 0);
+    check('no Galactic boss on a fresh save',
+          TYPES.every(t => store.galacticBossUnlocked(t) === false));
+
+    /* Register 50 Awakening creatures. */
+    for (const sp of ea.slice(0, 50)) store.recordCapture(sp.id, { shiny: false });
+    check('registeredCount scopes to a set',
+          store.registeredCount(null, 'ea') === 50 && store.registeredCount(null, 'ga') === 0,
+          `${store.registeredCount(null, 'ea')} / ${store.registeredCount(null, 'ga')}`);
+    check('50 Awakening unlocks Common', store.galacticRarities().join() === '1');
+
+    /* Registering Galactic creatures must not advance the ladder. */
+    for (const sp of ga.slice(0, 30)) store.recordCapture(sp.id, { shiny: false });
+    check('Galactic registrations do not count towards it',
+          store.galacticRarities().join() === '1',
+          store.galacticRarities().join());
+    check('but they do count in their own set',
+          store.registeredCount(null, 'ga') === 30, String(store.registeredCount(null, 'ga')));
+    check('and in the overall total',
+          store.registeredCount() === 80, String(store.registeredCount()));
+
+    /* On to the top of the ladder. */
+    for (const sp of ea.slice(50, 70)) store.recordCapture(sp.id, { shiny: false });
+    check('70 Awakening opens every tier', store.galacticRarities().join() === '1,2,3,4');
+
+    const p = store.galacticProgress();
+    check('progress reports the base set total', p.total === 79, String(p.total));
+    check('progress reports nothing left', p.next === null && p.needed === 0);
+
+    /* The Galactic boss is unlocked per type, by capturing the Awakening one. */
+    await store.startFresh();
+    check('sealed to begin with', store.galacticBossUnlocked('Mystic') === false);
+    store.recordCapture(bossOf('Mystic').id, { shiny: false, source: 'boss' });
+    check('capturing Pheonyx unlocks the Mystic Galactic boss',
+          store.galacticBossUnlocked('Mystic') === true);
+    check('and only for that type',
+          TYPES.filter(t => t !== 'Mystic').every(t => store.galacticBossUnlocked(t) === false));
+
+    check('shinyCount scopes to a set too',
+          store.shinyCount(null, 'ea') === 0 && store.shinyCount(null, 'ga') === 0);
+    check('speciesTotal scopes to a set',
+          store.speciesTotal(null, 'ea') === 79 && store.speciesTotal(null, 'ga') === 77,
+          `${store.speciesTotal(null, 'ea')} / ${store.speciesTotal(null, 'ga')}`);
+
+    await store.startFresh();
   }
 
   /* =====================================================
@@ -1923,6 +2156,78 @@ async function run() {
     check('the creature collider was cleaned up',
           !g3.world.colliders.some(c => c.meta?.role === 'creature'));
     check('and the centre came back', g3.parts.gimmick.dormant === false);
+  }
+
+  /**
+   * The gate, once a type has two legendaries.
+   *
+   * Both must actually turn up over many gates, and neither may turn up before
+   * it is unlocked — a Galactic legendary appearing on a fresh save would hand
+   * the player the reward for a Collection they have not finished.
+   */
+  group('game: the gate picks between two legendaries');
+  {
+    await store.startFresh();
+    const g2 = new Game({});
+    g2.start('Mystic');
+    g2.plungeRelease();
+
+    /* Sealed: only ever the Awakening boss. */
+    const sealed = new Set();
+    for (let i = 0; i < 400; i++) sealed.add(g2._pickBoss()?.setKey);
+    check('sealed, the gate only offers the Awakening legendary',
+          sealed.size === 1 && sealed.has('ea'), [...sealed].join(','));
+
+    /* Unlock it by capturing Pheonyx, exactly as a player would. */
+    store.recordCapture(bossOf('Mystic').id, { shiny: false, source: 'boss' });
+    check('the Galactic legendary is unlocked', store.galacticBossUnlocked('Mystic') === true);
+
+    const seen = { ea: 0, ga: 0 };
+    for (let i = 0; i < 4000; i++) {
+      const b = g2._pickBoss();
+      if (b) seen[b.setKey]++;
+    }
+    check('both legendaries turn up', seen.ea > 0 && seen.ga > 0, JSON.stringify(seen));
+
+    const share = seen.ga / (seen.ea + seen.ga);
+    check('at roughly even odds', Math.abs(share - GALACTIC_BOSS_ODDS) < 0.05, share.toFixed(3));
+    note(`gate picks: ${seen.ea} Awakening, ${seen.ga} Galactic (${(share * 100).toFixed(1)}% Galactic)`);
+
+    /* And a Galactic boss stage actually runs and registers. */
+    let ran = false;
+    for (let i = 0; i < 60 && !ran; i++) {
+      await store.startFresh();
+      store.recordCapture(bossOf('Mystic').id, { shiny: false, source: 'boss' });
+
+      const g3 = new Game({});
+      g3.start('Mystic');
+      g3.plungeRelease();
+      g3.run.gateArmed = true;
+      g3._enterSaucer(g3.ball);
+      g3._lastNow = 1200000 + i * 1000;
+      g3._updateSaucer(g3._lastNow);
+
+      if (g3.sub?.sp?.setKey !== 'ga') continue;
+      ran = true;
+
+      const boss = g3.sub.sp;
+      check('a Galactic boss stage starts', g3.phase === PHASE.BOSS, g3.phase);
+      check('  it is that type\'s Galactic legendary',
+            boss.id === galacticBossOf('Mystic').id, boss.name);
+      check('  it takes a legendary\'s worth of hits',
+            g3.sub.meterMax === CAPTURE_METER[5], String(g3.sub.meterMax));
+
+      g3.sub.meter = 0;
+      g3.sub.shielded = false;
+      strike(g3);
+      g3._updateBoss(0.016);
+      check('  beating it registers the Galactic legendary',
+            store.isRegistered(boss.id) === true);
+      check('  and the mode ended cleanly', g3.sub === null && g3.phase === PHASE.PLAY);
+    }
+    check('a Galactic boss came up within 60 gates', ran === true);
+
+    await store.startFresh();
   }
 
   group('game: Evolution Mode signals the shard bank');

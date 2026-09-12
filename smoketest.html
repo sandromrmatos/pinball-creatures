@@ -321,6 +321,41 @@ async function run() {
     check('there are five type tabs',
           doc.querySelectorAll('#collection-body .type-tab').length === 5);
 
+    /* ---- the two creature sets ---- */
+    const setTabs = () => [...doc.querySelectorAll('#collection-body .set-tab')];
+    check('there are two set tabs', setTabs().length === 2, `${setTabs().length} tabs`);
+    check('the base set is the one selected',
+          setTabs()[0].classList.contains('active'));
+    check('the sets are named',
+          setTabs().map(b => b.querySelector('b')?.textContent).join(' | ')
+            === 'Elemental Awakening | Galactic Adventures',
+          setTabs().map(b => b.querySelector('b')?.textContent).join(' | '));
+    check('no unlock ladder on the base set', !doc.querySelector('#collection-body .gate-note'));
+
+    setTabs()[1].click();
+    await wait(300);
+    check('switching to Galactic re-renders',
+          doc.querySelectorAll('#collection-body .cell').length > 3,
+          `${doc.querySelectorAll('#collection-body .cell').length} cells`);
+    check('the Galactic tab is now active',
+          setTabs()[1].classList.contains('active'));
+    check('the unlock ladder is shown', !!doc.querySelector('#collection-body .gate-note'));
+    check('it lists all four tiers',
+          doc.querySelectorAll('#collection-body .gate-list li').length === 4,
+          `${doc.querySelectorAll('#collection-body .gate-list li').length} rows`);
+    check('on a fresh save every tier is shut',
+          [...doc.querySelectorAll('#collection-body .gate-list li')].every(li => li.classList.contains('shut')));
+    check('locked creatures are sealed, not merely unregistered',
+          doc.querySelectorAll('#collection-body .cell.sealed').length > 0,
+          `${doc.querySelectorAll('#collection-body .cell.sealed').length} sealed`);
+    check('the Galactic legendary is sealed too',
+          !!doc.querySelector('#collection-body .boss-chip.sealed'));
+
+    setTabs()[0].click();
+    await wait(300);
+    check('and back to the base set', setTabs()[0].classList.contains('active'));
+    check('which seals nothing', !doc.querySelector('#collection-body .cell.sealed'));
+
     // Switching type must re-render rather than throw.
     const tabs = doc.querySelectorAll('#collection-body .type-tab');
     tabs[3].click();
@@ -562,7 +597,29 @@ async function run() {
     check('the precache list loads', pc.ok, `HTTP ${pc.status}`);
     if (pc.ok) {
       const list = await pc.json();
-      check('it covers every sprite', list.count === 158, String(list.count));
+      /**
+       * Counted against the CSVs rather than pinned to a number, so adding a set
+       * cannot leave this quietly asserting the old total. Every set is
+       * precached, locked tiers included: a creature that appears the moment an
+       * unlock lands has to already be on the device.
+       */
+      const setFiles = ['Elemental Awakening Creatures.csv', 'Galactic Adventures.csv'];
+      let wanted = 0;
+      for (const f of setFiles) {
+        const text = await (await fetch(encodeURI(f))).text();
+        // Rows, less the header. Enough for a count; the real parser is tested
+        // properly in selftest.
+        wanted += text.trim().split(/\r?\n/).length - 1;
+      }
+      check('it covers every sprite in both sets', list.count === wanted * 2,
+            `${list.count} listed, expected ${wanted * 2}`);
+      check('and both variants of each', list.count % 2 === 0, String(list.count));
+      check('it lists art and shinies',
+            list.assets.some(a => a.startsWith('images/')) &&
+            list.assets.some(a => a.startsWith('shiny/')));
+      check('it includes Galactic Adventures art',
+            list.assets.some(a => a.includes('Pantheraura')),
+            list.assets.filter(a => a.includes('Pantheraura')).join(', '));
       check('paths are URL-encoded like the game asks for them',
             list.assets.some(a => a.includes('%20')));
       // Spot-check that a listed path really resolves.

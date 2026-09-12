@@ -1,18 +1,22 @@
 <#
     downscale-sprites.ps1 — build the game's sprite set from Search and Go
 
-    Search and Go ships 500x500 PNGs averaging ~270 KB each. The 79 Elemental
-    Awakening creatures plus their 79 shinies come to 41.6 MB, which is far too
-    much for a service worker to precache on a phone — and this game has to work
-    offline, so every sprite it uses must be precached.
+    Search and Go ships 500x500 PNGs averaging ~270 KB each. Elemental Awakening
+    alone is 79 creatures plus 79 shinies at 41.6 MB, and Galactic Adventures adds
+    another 77 pairs. That is far too much for a service worker to precache on a
+    phone — and this game has to work offline, so every sprite it uses must be
+    precached.
 
     Nothing on the table is ever drawn larger than about 120 CSS px, so 256x256
     is already generous even at a 2x device pixel ratio. Re-encoding at that size
     cuts the set to a few MB.
 
-    Re-runnable and idempotent: it reads the creature list straight from the CSV,
-    so when you add creatures to the set you just run it again. Source files are
-    only ever read, never modified.
+    Every set CSV in the project root is walked, so adding a set means dropping
+    its CSV in and re-running. Both sets share `images/` and `shiny/`: their
+    filenames are disjoint, verified by the duplicate check below, and one flat
+    folder per variant keeps Species.imagePath as a plain filename join.
+
+    Re-runnable and idempotent. Source files are only ever read, never modified.
 
     Usage, from the project root:
         powershell -ExecutionPolicy Bypass -File tools\downscale-sprites.ps1
@@ -24,24 +28,52 @@
 
 [CmdletBinding()]
 param(
-    [string] $Source = 'C:\Users\sandr\Downloads\Search and Go',
-    [int]    $Size   = 256,
-    [switch] $Force
+    [string]   $Source = 'C:\Users\sandr\Downloads\Search and Go',
+    [int]      $Size   = 256,
+    [string[]] $Sets   = @('Elemental Awakening Creatures.csv', 'Galactic Adventures.csv'),
+    [switch]   $Force
 )
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 $root = Split-Path -Parent $PSScriptRoot
-$csv  = Join-Path $root 'Elemental Awakening Creatures.csv'
 
-if (-not (Test-Path $csv))    { throw "Creature CSV not found at $csv" }
 if (-not (Test-Path $Source)) { throw "Source project not found at $Source" }
 
-# The CSV's Image column is the filename, and `shiny/` mirrors `images/`
-# filename for filename, so one list covers both folders.
-$files = @(Import-Csv $csv | ForEach-Object { $_.Image } | Where-Object { $_ } | Select-Object -Unique)
-Write-Host "$($files.Count) creature sprites listed in the CSV" -ForegroundColor Cyan
+<#  Collect the sprite filenames from every set.
+
+    The Image column is the filename and `shiny/` mirrors `images/` name for
+    name, so one list covers both folders. Property access is case-insensitive,
+    which matters: Elemental Awakening spells the column "Image" and Galactic
+    Adventures spells it "image". #>
+$files = [ordered]@{}
+$owner = @{}
+$dupes = @()
+
+foreach ($set in $Sets) {
+    $csv = Join-Path $root $set
+    if (-not (Test-Path $csv)) { throw "Set CSV not found at $csv" }
+
+    $names = @(Import-Csv $csv | ForEach-Object { $_.Image } | Where-Object { $_ })
+    $unique = @($names | Select-Object -Unique)
+
+    foreach ($n in $unique) {
+        if ($files.Contains($n)) { $dupes += "$n ($($owner[$n]) vs $set)"; continue }
+        $files[$n] = $true
+        $owner[$n] = $set
+    }
+    Write-Host ("{0,-40} {1,4} sprites" -f $set, $unique.Count) -ForegroundColor Cyan
+}
+
+<#  A collision would mean one set silently overwriting the other's artwork, and
+    the loser would show the wrong creature everywhere. Refuse rather than guess. #>
+if ($dupes.Count) {
+    throw "Sets share sprite filenames, so they cannot share one folder: $($dupes -join '; ')"
+}
+
+$all = @($files.Keys)
+Write-Host "$($all.Count) unique sprites across $($Sets.Count) set(s)" -ForegroundColor Cyan
 
 <#  Resize one PNG, preserving transparency.
 
@@ -86,7 +118,7 @@ foreach ($dir in 'images', 'shiny') {
 
     $done = 0; $skipped = 0; $missing = @(); $bytesIn = 0; $bytesOut = 0
 
-    foreach ($name in $files) {
+    foreach ($name in $all) {
         $in  = Join-Path $inDir  $name
         $out = Join-Path $outDir $name
 

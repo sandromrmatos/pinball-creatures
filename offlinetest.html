@@ -97,7 +97,7 @@ async function run() {
   }
   check('sw.js registers', true);
 
-  /* Precaching 158 sprites takes a while, and the install promise is what
+  /* Precaching several hundred sprites takes a while, and the install promise is what
      tracks it — so wait for the worker to reach `activated`, not merely for
      registration to resolve. */
   const started = performance.now();
@@ -132,14 +132,30 @@ async function run() {
     '/js/views.js', '/js/audio.js', '/js/ui.js',
     '/Elemental%20Awakening%20Creatures.csv',
     '/Elemental%20Awakening%20Creatures%20Stats%20and%20Moves.csv',
+    '/Galactic%20Adventures.csv',
     '/icons/icon-192.png', '/icons/icon-512.png'
   ];
 
   const missingCore = CORE.filter(p => !paths.has(p) && !paths.has(decodeURI(p)));
   check('every core file is cached', missingCore.length === 0, missingCore.join(', '));
 
+  /**
+   * Checked against precache.json rather than a hardcoded count.
+   *
+   * The list is generated from the CSVs, so comparing the cache to it asks the
+   * question that matters — "did everything the game will ask for get stored" —
+   * and keeps on asking it when a set is added.
+   */
+  const wanted = await (await fetch('precache.json')).json();
   const sprites = [...paths].filter(p => p.startsWith('/images/') || p.startsWith('/shiny/'));
-  check('all 158 sprites are cached', sprites.length === 158, `${sprites.length} cached`);
+  check(`all ${wanted.count} sprites are cached`, sprites.length === wanted.count,
+        `${sprites.length} cached of ${wanted.count} listed`);
+
+  const missingSprites = wanted.assets.filter(a => !paths.has('/' + a));
+  check('and none of the listed ones are missing', missingSprites.length === 0,
+        missingSprites.slice(0, 5).join(', '));
+  check('both sets are cached',
+        sprites.some(p => p.includes('Meditot')) && sprites.some(p => p.includes('Psybella')));
 
   /* =====================================================
      Go offline for real

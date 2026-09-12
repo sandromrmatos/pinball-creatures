@@ -5,20 +5,102 @@
    the game, which is deliberate: every number worth re-balancing lives
    here, so tuning the game means editing one file.
 
-   Two CSVs are joined on `id_output`, exactly as Search and Go does it:
-     • Elemental Awakening Creatures.csv                 — species, images, rarity, evolutions
-     • Elemental Awakening Creatures Stats and Moves.csv  — stats and learnsets
+   Creatures come from Search and Go's CSVs, joined on `id_output` exactly as
+   that game does it. See SETS below for the files.
 
-   The stats file is only used for flavour on the Collection sheet. There
-   is no battling here, so nothing in the physics or scoring reads it.
+   Stats and learnsets are only flavour on the Collection sheet. There is no
+   battling here, so nothing in the physics or scoring reads them.
    ============================================================ */
-
-export const CSV_FILE = 'Elemental Awakening Creatures.csv';
-export const STATS_CSV_FILE = 'Elemental Awakening Creatures Stats and Moves.csv';
-export const SET_NAME = 'Elemental Awakening';
 
 export const IMAGE_DIR = 'images';
 export const SHINY_DIR = 'shiny';
+
+/* ---------------------------------------------------------------
+   Sets
+   --------------------------------------------------------------- */
+
+/**
+ * The creature sets, in dex order.
+ *
+ * Elemental Awakening splits species and stats across two files; Galactic
+ * Adventures carries both in one row, so `statsCsv` is null and the same records
+ * are used for the join. That difference lives here rather than in the loader.
+ *
+ * `order` keeps the two dexes from interleaving. Both sets number their
+ * `id_output` from 1, so sorting on that alone would shuffle them together.
+ *
+ * Both sets share `images/` and `shiny/`. Their sprite filenames are disjoint —
+ * tools\downscale-sprites.ps1 refuses to run if that ever stops being true — and
+ * one flat folder per variant keeps Species.imagePath a plain filename join.
+ */
+export const SETS = {
+  ea: {
+    key: 'ea',
+    order: 0,
+    name: 'Elemental Awakening',
+    short: 'Awakening',
+    csv: 'Elemental Awakening Creatures.csv',
+    statsCsv: 'Elemental Awakening Creatures Stats and Moves.csv'
+  },
+  ga: {
+    key: 'ga',
+    order: 1,
+    name: 'Galactic Adventures',
+    short: 'Galactic',
+    csv: 'Galactic Adventures.csv',
+    statsCsv: null
+  }
+};
+
+/** Set keys in dex order. `ea` is the base set and is always available. */
+export const SET_KEYS = Object.keys(SETS).sort((a, b) => SETS[a].order - SETS[b].order);
+export const BASE_SET = 'ea';
+
+/* ---------------------------------------------------------------
+   Unlocking Galactic Adventures
+   --------------------------------------------------------------- */
+
+/**
+ * Galactic Adventures is earned with the base set, one rarity tier at a time.
+ *
+ * Gated on creatures *registered* from Elemental Awakening rather than on score
+ * or games played, so the reward for finishing one Collection is the start of
+ * the next. 50 of 79 is most of the easy half; 70 asks for nearly all of it,
+ * including the four legendaries behind the gate.
+ *
+ * A tier unlocks the Galactic creatures *of that rarity*, which then share the
+ * rarity bucket with their Elemental counterparts — so unlocking Common does not
+ * make Commons any more likely, it makes them more varied.
+ */
+export const GALACTIC_UNLOCKS = [
+  { rarity: 1, registered: 50 },
+  { rarity: 2, registered: 60 },
+  { rarity: 3, registered: 65 },
+  { rarity: 4, registered: 70 }
+];
+
+/** Which Galactic rarities are open at this many Elemental registrations. */
+export function galacticRaritiesUnlocked(baseRegistered) {
+  const n = Math.max(0, Math.round(Number(baseRegistered) || 0));
+  return GALACTIC_UNLOCKS.filter(g => n >= g.registered).map(g => g.rarity);
+}
+
+/** The next tier to work towards, or null once they are all open. */
+export function nextGalacticUnlock(baseRegistered) {
+  const n = Math.max(0, Math.round(Number(baseRegistered) || 0));
+  return GALACTIC_UNLOCKS.find(g => n < g.registered) || null;
+}
+
+/**
+ * The rarity a Galactic creature is gated behind.
+ *
+ * Evolved forms have no rarity of their own, so they follow their family's —
+ * evolving something you were allowed to catch must never be blocked.
+ */
+export function galacticGateRarity(sp) {
+  if (!sp || sp.setKey !== 'ga') return 0;
+  return effectiveRarityOf(sp);
+}
 
 /* ---------------------------------------------------------------
    Types and modes
@@ -120,11 +202,28 @@ export const RARITY_WEIGHTS = { 1: 60, 2: 28, 3: 8, 4: 3 };
  *
  * A promoted creature is pulled out of its type's ordinary encounter pool
  * by buildPools(), so it cannot be both the boss and a routine catch.
+ *
+ * Keyed by set, because each set appoints its own boss per type. Galactic
+ * Adventures has no rarity 5 Neutral at all — and no rarity 4 either — so
+ * Goggly is promoted: it is the highest-statted Neutral first stage with no
+ * evolutions, which is structurally what every real legendary in both sets is.
  */
 export const BOSS_OVERRIDES = {
-  Neutral: 'Alpakina',
-  Celestial: 'Verdanthorn'
+  ea: {
+    Neutral: 'Alpakina',
+    Celestial: 'Verdanthorn'
+  },
+  ga: {
+    Neutral: 'Goggly'
+  }
 };
+
+/**
+ * A second boss per type, from Galactic Adventures, unlocked by beating that
+ * type's Elemental boss. With both available the gate picks between them at
+ * even odds, so neither becomes the only thing left to fight.
+ */
+export const GALACTIC_BOSS_ODDS = 0.5;
 
 /** Shiny rate, matching Search and Go's baseline wild odds. */
 export const SHINY_ODDS = 0.01;
@@ -387,10 +486,12 @@ export class Species {
   get stageLabel() { return `Stage ${this.stage}`; }
   get rarityName() { return RARITY_NAMES[this.effectiveRarity] || null; }
 
-  /** True for anything the Awakening Gate guards. */
+  get setName() { return SETS[this.setKey]?.name || this.setKey; }
+
+  /** True for anything the Awakening Gate guards, in either set. */
   get isBoss() { return this.effectiveRarity === 5; }
 
-  /** True for the 42 creatures Encounter Mode can roll. */
+  /** True for anything Encounter Mode can roll, unlocks aside. */
   get isCatchable() { return this.stage === 1 && !this.isBoss; }
 }
 
@@ -408,9 +509,15 @@ export const DB = {
   familyOf: new Map(),      // memberId -> rootId
   familyMembers: new Map(), // rootId -> [ids, roughly stage order]
 
-  /** type -> { rarity -> [Species] } for Encounter Mode. */
+  /**
+   * type -> { rarity -> [Species] } for Encounter Mode.
+   *
+   * Both sets share these buckets. Which members are actually reachable depends
+   * on the player's unlocks, and that is decided at roll time by rollEncounter
+   * rather than baked in here — the pools are data, the gates are progress.
+   */
   pools: new Map(),
-  /** type -> Species | null */
+  /** setKey -> (type -> Species | null) */
   bosses: new Map(),
 
   warnings: []
@@ -490,30 +597,74 @@ export function lineagePath(id) {
  * roll slightly wrong. Reweighting against what is present keeps the
  * distribution honest whatever the CSV holds.
  */
-export function rollEncounter(type, { minRarity = 0 } = {}) {
+export function rollEncounter(type, { minRarity = 0, galacticRarities = [] } = {}) {
   const byRarity = DB.pools.get(type);
   if (!byRarity) return null;
 
+  /**
+   * Locked Galactic creatures are filtered out *before* the weights are worked
+   * out, not after the roll.
+   *
+   * Rolling first and rejecting afterwards would either need a retry loop or
+   * would silently return nothing, and both change the distribution. Filtering
+   * first keeps the one property this function exists to guarantee: the weights
+   * are always reweighted against what is actually reachable.
+   */
+  const open = new Set(galacticRarities);
+  const reachable = sp => sp.setKey === BASE_SET || open.has(sp.effectiveRarity);
+
+  const buckets = {};
+  for (const r of Object.keys(RARITY_WEIGHTS).map(Number)) {
+    buckets[r] = (byRarity[r] || []).filter(reachable);
+  }
+
   const rarities = Object.keys(RARITY_WEIGHTS)
     .map(Number)
-    .filter(r => r >= minRarity && (byRarity[r] || []).length);
+    .filter(r => r >= minRarity && buckets[r].length);
   if (!rarities.length) return null;
 
   const total = rarities.reduce((s, r) => s + RARITY_WEIGHTS[r], 0);
   let roll = Math.random() * total;
   for (const r of rarities) {
     roll -= RARITY_WEIGHTS[r];
-    if (roll <= 0) return pick(byRarity[r]);
+    if (roll <= 0) return pick(buckets[r]);
   }
-  return pick(byRarity[rarities[rarities.length - 1]]);
+  return pick(buckets[rarities[rarities.length - 1]]);
 }
 
-export const bossOf = type => DB.bosses.get(type) || null;
+/** The base set's boss for a type. The one the Awakening Gate always offers. */
+export const bossOf = type => DB.bosses.get(BASE_SET)?.get(type) || null;
+
+/** A set's boss for a type. */
+export const bossOfSet = (setKey, type) => DB.bosses.get(setKey)?.get(type) || null;
+
+/** The Galactic boss for a type, which beating the Elemental one unlocks. */
+export const galacticBossOf = type => bossOfSet('ga', type);
+
+/**
+ * Every boss a type's gate could produce right now.
+ *
+ * Returned as a list rather than pre-rolled so the caller owns the randomness —
+ * which is what lets the tests pin it down.
+ */
+export function bossChoicesFor(type, { galacticUnlocked = false } = {}) {
+  const out = [];
+  const base = bossOf(type);
+  if (base) out.push(base);
+  if (galacticUnlocked) {
+    const ga = galacticBossOf(type);
+    if (ga) out.push(ga);
+  }
+  return out;
+}
 
 /** Every creature a mode can produce, boss included. Used by the Collection. */
-export function speciesOfType(type) {
-  return DB.species.filter(s => s.type === type);
+export function speciesOfType(type, setKey = null) {
+  return DB.species.filter(s => s.type === type && (!setKey || s.setKey === setKey));
 }
+
+/** Every species in a set. */
+export const speciesOfSet = setKey => DB.species.filter(s => s.setKey === setKey);
 
 /* ---------------------------------------------------------------
    Stats (Collection flavour only)
@@ -562,7 +713,7 @@ function finaliseModes() {
   }
 }
 
-function buildSpecies(records, statsRecords) {
+function buildSpecies(records, statsRecords, set) {
   const statsById = new Map();
   const statsByName = new Map();
   for (const r of statsRecords) {
@@ -574,13 +725,16 @@ function buildSpecies(records, statsRecords) {
   records.forEach((r, idx) => {
     const id = r['id_output'];
     const name = r['name'];
-    if (!id || !name) { DB.warnings.push(`Row ${idx + 2} has no id or name, skipped`); return; }
+    if (!id || !name) {
+      DB.warnings.push(`${set.name}: row ${idx + 2} has no id or name, skipped`);
+      return;
+    }
 
     const type = r['type'] || 'Neutral';
     if (!TYPES.includes(type)) DB.warnings.push(`${name}: unknown type "${type}"`);
 
     const stats = statsById.get(id) || statsByName.get(name.toLowerCase()) || null;
-    if (!stats) DB.warnings.push(`${name}: no stats row found`);
+    if (!stats) DB.warnings.push(`${set.name}: ${name} has no stats row`);
 
     // Trailing digits of the id are the dex number, which keeps the
     // Collection in the same order as the CSV and as Search and Go.
@@ -596,7 +750,8 @@ function buildSpecies(records, statsRecords) {
       rarity: int(r['rarity']),           // null on every evolved form
       evolvesToNames: splitList(r['evolves to']),
       evolvesToIds: [],
-      set: SET_NAME,
+      setKey: set.key,
+      setOrder: set.order,
       baseStats: readStats(stats, name),
       moves: readMoves(stats, name)
     });
@@ -604,7 +759,7 @@ function buildSpecies(records, statsRecords) {
     out.push(sp);
   });
 
-  return out.sort((a, b) => (a.order - b.order) || a.id.localeCompare(b.id));
+  return out;
 }
 
 /** Resolve `Evolves to` names into ids and record one parent per child. */
@@ -670,64 +825,130 @@ function buildFamilies() {
  * Epic catch in the mode they now guard.
  */
 function buildPools() {
+  for (const key of SET_KEYS) DB.bosses.set(key, new Map());
+
   for (const type of TYPES) {
     const byRarity = { 1: [], 2: [], 3: [], 4: [] };
-    let boss = null;
+    const bosses = {};
 
     for (const sp of DB.species) {
       if (sp.type !== type) continue;
       if (sp.stage !== 1 || !sp.rarity) continue;   // evolved forms are earned, not caught
-      if (sp.rarity === 5) { boss = sp; continue; }
+      if (sp.rarity === 5) { bosses[sp.setKey] = sp; continue; }
       if (byRarity[sp.rarity]) byRarity[sp.rarity].push(sp);
       else DB.warnings.push(`${sp.name}: rarity ${sp.rarity} is outside 1-5`);
     }
 
-    if (!boss) {
-      const name = BOSS_OVERRIDES[type];
-      const promoted = name ? speciesByName(name) : null;
-      if (promoted && promoted.type === type) {
-        boss = promoted;
-        for (const r of Object.keys(byRarity)) {
-          byRarity[r] = byRarity[r].filter(s => s.id !== promoted.id);
+    /* One boss per set per type. A set with no legendary of this type promotes
+       one, and a promoted creature leaves the ordinary pool in the same pass so
+       it cannot be both the boss and a routine catch. */
+    for (const key of SET_KEYS) {
+      let boss = bosses[key] || null;
+
+      if (!boss) {
+        const name = BOSS_OVERRIDES[key]?.[type];
+        const promoted = name ? speciesByName(name) : null;
+        if (promoted && promoted.type === type && promoted.setKey === key) {
+          boss = promoted;
+          for (const r of Object.keys(byRarity)) {
+            byRarity[r] = byRarity[r].filter(s => s.id !== promoted.id);
+          }
+        } else if (name) {
+          DB.warnings.push(
+            `${SETS[key].name}: boss override "${name}" for ${type} is missing, ` +
+            'the wrong type or in the wrong set');
+        } else {
+          DB.warnings.push(
+            `${SETS[key].name}: ${type} has no legendary and no override, so it has no boss`);
         }
-      } else if (name) {
-        DB.warnings.push(`Boss override "${name}" for ${type} not found or is the wrong type`);
-      } else {
-        DB.warnings.push(`${type} has no legendary and no override, so it has no boss stage`);
       }
+
+      if (boss) boss.promotedBoss = boss.rarity !== 5;
+      DB.bosses.get(key).set(type, boss);
     }
 
-    if (boss) boss.promotedBoss = boss.rarity !== 5;
-    DB.bosses.set(type, boss);
     DB.pools.set(type, byRarity);
   }
 }
 
-/** Stamp the resolved rarity on every species so views never recompute it. */
+/**
+ * Stamp the resolved rarity on every species so views never recompute it.
+ *
+ * A boss in either set reads as rarity 5, promoted or not, because that is what
+ * the player meets: a legendary behind the gate.
+ */
 function stampRarities() {
+  const bossIds = new Set();
+  for (const key of SET_KEYS) {
+    for (const boss of DB.bosses.get(key).values()) if (boss) bossIds.add(boss.id);
+  }
+
   for (const sp of DB.species) {
-    sp.effectiveRarity = bossOf(sp.type)?.id === sp.id ? 5 : effectiveRarityOf(sp);
+    sp.effectiveRarity = bossIds.has(sp.id) ? 5 : effectiveRarityOf(sp);
   }
 }
 
 /**
- * Load and join both CSVs, then build the graphs the game needs.
+ * Load every set, then build the graphs the game needs.
  *
- * Both files are required. Unlike Search and Go there are no optional sets
- * to degrade gracefully around — without the creature list there is no game,
- * so a failure here is fatal and main.js shows it on the boot screen.
+ * The base set is required: without it there is no game, so a failure there is
+ * fatal and main.js shows it on the boot screen. A later set is not — if
+ * Galactic Adventures fails to load, the game is still entirely playable, so it
+ * degrades to a warning rather than taking the whole boot down with it.
+ *
+ * Sets are loaded in parallel but assembled in dex order, so `order` decides the
+ * Collection's layout rather than whichever fetch happened to finish first.
  */
-export async function loadDatabase({ csv = CSV_FILE, statsCsv = STATS_CSV_FILE } = {}) {
+export async function loadDatabase({ sets = SET_KEYS } = {}) {
   DB.warnings.length = 0;
   finaliseModes();
 
-  const [csvText, statsText] = await Promise.all([fetchText(csv), fetchText(statsCsv)]);
+  const wanted = sets.filter(k => SETS[k]);
 
-  const records = toRecords(parseCSV(csvText));
-  const statsRecords = toRecords(parseCSV(statsText));
-  if (!records.length) throw new Error(`"${csv}" has no data rows`);
+  const loaded = await Promise.all(wanted.map(async key => {
+    const set = SETS[key];
+    try {
+      const [csvText, statsText] = await Promise.all([
+        fetchText(set.csv),
+        set.statsCsv ? fetchText(set.statsCsv) : Promise.resolve(null)
+      ]);
 
-  DB.species = buildSpecies(records, statsRecords);
+      const records = toRecords(parseCSV(csvText));
+      if (!records.length) throw new Error(`"${set.csv}" has no data rows`);
+
+      // Galactic Adventures carries its stats on the same row, so the records
+      // join against themselves.
+      const statsRecords = statsText ? toRecords(parseCSV(statsText)) : records;
+
+      return { key, species: buildSpecies(records, statsRecords, set) };
+    } catch (e) {
+      if (key === BASE_SET) throw e;
+      DB.warnings.push(`${set.name} could not be loaded, so it is unavailable: ${e.message}`);
+      return { key, species: [] };
+    }
+  }));
+
+  DB.species = loaded
+    .sort((a, b) => SETS[a.key].order - SETS[b.key].order)
+    .flatMap(l => l.species.sort((a, b) => (a.order - b.order) || a.id.localeCompare(b.id)));
+
+  /* Ids and names have to be unique across sets, because everything downstream
+     — the save file most of all — keys on them. A clash would silently merge two
+     creatures into one Collection entry. */
+  const ids = new Set();
+  const names = new Map();
+  for (const sp of DB.species) {
+    if (ids.has(sp.id)) DB.warnings.push(`Duplicate id "${sp.id}" (${sp.name})`);
+    ids.add(sp.id);
+    const lower = sp.name.toLowerCase();
+    if (names.has(lower)) {
+      DB.warnings.push(
+        `Name "${sp.name}" is in both ${names.get(lower)} and ${sp.setName}, ` +
+        'so evolution links between them are ambiguous');
+    }
+    names.set(lower, sp.setName);
+  }
+
   DB.byId = new Map(DB.species.map(s => [s.id, s]));
   DB.byName = new Map(DB.species.map(s => [s.name.toLowerCase(), s]));
 

@@ -25,8 +25,8 @@ import {
   CAPTURE_METER, CAPTURE_SECONDS, CAPTURE_DRIFT,
   EVOLUTION_SHARDS, EVOLUTION_SECONDS,
   BOSS_SECONDS, BOSS_SHIELD_SECONDS,
-  SHINY_ODDS, SHINY_DOUBLE_AT,
-  rollEncounter, bossOf, speciesById, evolutionTargets,
+  SHINY_ODDS, SHINY_DOUBLE_AT, GALACTIC_BOSS_ODDS,
+  rollEncounter, bossOf, bossChoicesFor, speciesById, evolutionTargets,
   chance, clamp, pick, randRange
 } from './data.js';
 
@@ -939,7 +939,10 @@ export class Game {
      --------------------------------------------------------------- */
 
   _startEncounter() {
-    const sp = rollEncounter(this.run.type);
+    /* Which Galactic rarities are open is read at the moment of the roll rather
+       than latched when the game started, so a tier earned by a capture earlier
+       in this same game is live immediately. */
+    const sp = rollEncounter(this.run.type, { galacticRarities: store.galacticRarities() });
     if (!sp) { this._kickOutOfSaucer(); return; }
 
     this.run.encounterArmed = false;
@@ -1112,7 +1115,17 @@ export class Game {
     this.run.gateArmed = true;
     this._award(SCORE.gateOpen, { mult: false });
     this._sound('gate');
-    this._emit('armed', { what: 'boss', boss: bossOf(this.run.type) });
+
+    /* Which legendary it will be is decided when the gate is shot, not now, so
+       this reports the field rather than naming one it might not produce. */
+    const choices = bossChoicesFor(this.run.type, {
+      galacticUnlocked: store.galacticBossUnlocked(this.run.type)
+    });
+    this._emit('armed', {
+      what: 'boss',
+      boss: choices.length === 1 ? choices[0] : null,
+      choices
+    });
   }
 
   /* ---------------------------------------------------------------
@@ -1230,8 +1243,24 @@ export class Game {
      Boss stage
      --------------------------------------------------------------- */
 
+  /**
+   * The gate opens on one of the type's legendaries.
+   *
+   * Beating a type's Elemental legendary unlocks a Galactic one alongside it, and
+   * from then on the gate picks between them at even odds. Both, rather than a
+   * replacement: the Elemental boss stays worth fighting for its shiny, and a
+   * type you have cleared still has something left in it.
+   */
+  _pickBoss() {
+    const choices = bossChoicesFor(this.run.type, {
+      galacticUnlocked: store.galacticBossUnlocked(this.run.type)
+    });
+    if (choices.length < 2) return choices[0] || null;
+    return chance(GALACTIC_BOSS_ODDS) ? choices[1] : choices[0];
+  }
+
   _startBoss() {
-    const boss = bossOf(this.run.type);
+    const boss = this._pickBoss();
     if (!boss) { this._kickOutOfSaucer(); return; }
 
     this.run.gateArmed = false;

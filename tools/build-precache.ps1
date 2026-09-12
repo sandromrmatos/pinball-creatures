@@ -3,15 +3,20 @@
 
     sw.js keeps the shell (markup, modules, CSVs) in a hand-written list,
     because that set is small and its absence means "no game". The sprites are
-    a different problem: 158 files, and they change whenever the CSV does. So
-    they are generated here instead of being maintained by hand.
+    a different problem: over 300 files across two sets, and they change whenever
+    a CSV does. So they are generated here instead of maintained by hand.
 
-    The list is derived from the CSV rather than from the contents of images/,
+    The list is derived from the CSVs rather than from the contents of images/,
     so it can never drift from what the game will actually ask for. A file that
     is listed but missing is reported here rather than discovered as a blank
     creature later.
 
-    Re-run whenever the creature list changes, alongside downscale-sprites.ps1.
+    Every set is precached, locked tiers included. A creature that appears the
+    moment an unlock lands must already be on the device, or the reward for
+    finishing the base Collection would be a blank square until the next time the
+    player happened to be online.
+
+    Re-run whenever a creature list changes, alongside downscale-sprites.ps1.
 
     Usage, from the project root:
         powershell -ExecutionPolicy Bypass -File tools\build-precache.ps1
@@ -19,18 +24,25 @@
 
 [CmdletBinding()]
 param(
-    [switch] $Quiet
+    [string[]] $Sets = @('Elemental Awakening Creatures.csv', 'Galactic Adventures.csv'),
+    [switch]   $Quiet
 )
 
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
-$csv = Join-Path $root 'Elemental Awakening Creatures.csv'
 $out = Join-Path $root 'precache.json'
 
-if (-not (Test-Path $csv)) { throw "Creature CSV not found at $csv" }
-
-$names = @(Import-Csv $csv | ForEach-Object { $_.Image } | Where-Object { $_ } | Select-Object -Unique)
+# Property access is case-insensitive, which matters: the two sets spell the
+# column "Image" and "image" respectively.
+$names = New-Object System.Collections.Generic.List[string]
+foreach ($set in $Sets) {
+    $csv = Join-Path $root $set
+    if (-not (Test-Path $csv)) { throw "Set CSV not found at $csv" }
+    foreach ($n in @(Import-Csv $csv | ForEach-Object { $_.Image } | Where-Object { $_ })) {
+        if (-not $names.Contains($n)) { $names.Add($n) }
+    }
+}
 
 $assets = New-Object System.Collections.Generic.List[string]
 $missing = New-Object System.Collections.Generic.List[string]
