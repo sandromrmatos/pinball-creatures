@@ -232,10 +232,29 @@ async function run() {
     const sheet = doc.getElementById('sheet-mode');
     check('the mode picker is open at boot', !sheet.classList.contains('hidden'));
 
-    const cards = doc.querySelectorAll('#mode-body .mode-card');
-    check('there is a card per mode', cards.length === 5, String(cards.length));
+    const cards = [...doc.querySelectorAll('#mode-body .mode-card')];
+    check('there is a card per mode', cards.length === 6, String(cards.length));
     check('each card names its table',
-          [...cards].every(c => (c.textContent || '').trim().length > 10));
+          cards.every(c => (c.textContent || '').trim().length > 10));
+
+    /**
+     * The sixth is the Raid Vault, and on a fresh save it has to be shut — and
+     * shut in a way that cannot be clicked past, not merely styled as locked.
+     */
+    const sealed = cards.filter(c => c.classList.contains('sealed'));
+    check('exactly one table is sealed on a fresh save', sealed.length === 1,
+          String(sealed.length));
+    check('it is the last one', cards[5].classList.contains('sealed'));
+    check('and it is genuinely disabled', cards[5].disabled === true);
+    check('it says what to do about it',
+          !!cards[5].querySelector('.mc-locked') &&
+          /register/i.test(cards[5].querySelector('.mc-locked').textContent),
+          cards[5].querySelector('.mc-locked')?.textContent);
+
+    // Clicking it must do nothing at all.
+    cards[5].click();
+    await wait(250);
+    check('clicking a sealed table starts nothing', !sheet.classList.contains('hidden'));
 
     // Start a game the way a player would.
     cards[0].click();
@@ -323,12 +342,12 @@ async function run() {
 
     /* ---- the two creature sets ---- */
     const setTabs = () => [...doc.querySelectorAll('#collection-body .set-tab')];
-    check('there are two set tabs', setTabs().length === 2, `${setTabs().length} tabs`);
+    check('there are three set tabs', setTabs().length === 3, `${setTabs().length} tabs`);
     check('the base set is the one selected',
           setTabs()[0].classList.contains('active'));
     check('the sets are named',
           setTabs().map(b => b.querySelector('b')?.textContent).join(' | ')
-            === 'Elemental Awakening | Galactic Adventures',
+            === 'Elemental Awakening | Galactic Adventures | Exclusives',
           setTabs().map(b => b.querySelector('b')?.textContent).join(' | '));
     check('no unlock ladder on the base set', !doc.querySelector('#collection-body .gate-note'));
 
@@ -350,6 +369,24 @@ async function run() {
           `${doc.querySelectorAll('#collection-body .cell.sealed').length} sealed`);
     check('the Galactic legendary is sealed too',
           !!doc.querySelector('#collection-body .boss-chip.sealed'));
+
+    /* ---- the Exclusives set, gated as a whole table rather than by rarity ---- */
+    setTabs()[2].click();
+    await wait(300);
+    check('switching to Exclusives re-renders',
+          doc.querySelectorAll('#collection-body .cell').length > 3,
+          `${doc.querySelectorAll('#collection-body .cell').length} cells`);
+    check('it is headed by the table they are found in',
+          (doc.querySelector('#collection-body .ch-title h3')?.textContent || '') === 'Raid Vault',
+          doc.querySelector('#collection-body .ch-title h3')?.textContent);
+    check('it explains the one threshold, not a ladder',
+          !!doc.querySelector('#collection-body .gate-note') &&
+          !doc.querySelector('#collection-body .gate-list'));
+    check('on a fresh save every one of them is sealed',
+          [...doc.querySelectorAll('#collection-body .cell')].every(c => c.classList.contains('sealed')),
+          `${doc.querySelectorAll('#collection-body .cell.sealed').length} of ` +
+          `${doc.querySelectorAll('#collection-body .cell').length}`);
+    check('including its legendary', !!doc.querySelector('#collection-body .boss-chip.sealed'));
 
     setTabs()[0].click();
     await wait(300);
@@ -603,7 +640,13 @@ async function run() {
        * precached, locked tiers included: a creature that appears the moment an
        * unlock lands has to already be on the device.
        */
-      const setFiles = ['Elemental Awakening Creatures.csv', 'Galactic Adventures.csv'];
+      const setFiles = [
+        'Elemental Awakening Creatures.csv',
+        'Galactic Adventures.csv',
+        'Raid Exclusive - Search and Go.csv',
+        'Exclusives2.csv',
+        'Exclusives3.csv'
+      ];
       let wanted = 0;
       for (const f of setFiles) {
         const text = await (await fetch(encodeURI(f))).text();
@@ -611,7 +654,7 @@ async function run() {
         // properly in selftest.
         wanted += text.trim().split(/\r?\n/).length - 1;
       }
-      check('it covers every sprite in both sets', list.count === wanted * 2,
+      check('it covers every sprite in every set', list.count === wanted * 2,
             `${list.count} listed, expected ${wanted * 2}`);
       check('and both variants of each', list.count % 2 === 0, String(list.count));
       check('it lists art and shinies',
@@ -620,6 +663,7 @@ async function run() {
       check('it includes Galactic Adventures art',
             list.assets.some(a => a.includes('Pantheraura')),
             list.assets.filter(a => a.includes('Pantheraura')).join(', '));
+      check('and Exclusives art', list.assets.some(a => a.includes('Necrosmion')));
       check('paths are URL-encoded like the game asks for them',
             list.assets.some(a => a.includes('%20')));
       // Spot-check that a listed path really resolves.

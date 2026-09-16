@@ -41,7 +41,7 @@ import { MODES } from './data.js';
 import {
   World, Ball, Flipper, Rotor,
   segment, circle, arc, field, sensorCircle,
-  TABLE_W, TABLE_H, TAU
+  TABLE_W, TABLE_H, TAU, wrapAngle
 } from './physics.js';
 
 /* ---------------------------------------------------------------
@@ -871,8 +871,107 @@ function gimmickGears(world) {
   };
 }
 
+/**
+ * The Raid Vault: two nested rings that turn, each with a mouth.
+ *
+ * Every other centre is either static geometry or a spinning capsule. This one
+ * rotates its *walls*, which is a behaviour the solver already supports for free
+ * — an arc's start angle is read fresh every step, so moving it each frame is all
+ * a rotating wall takes.
+ *
+ * Rotating rather than a fixed cage on purpose, and this is the important part: a
+ * static ring with a gap is a trap, because a ball that gets inside has to find
+ * one fixed mouth again. A turning mouth sweeps past the ball instead, so
+ * wherever it ends up it is let out within one rotation. The two rings turn at
+ * different speeds and in opposite directions, so the moment both mouths line up
+ * has to be waited for rather than aimed at.
+ *
+ * Clearances, against a 4.7-wide ball: outer ring at 17 and inner at 8.5 leaves
+ * 8.5 between the centrelines and 6.3 clear of both walls. Inside the inner ring
+ * there is 7.4 of clear radius, which holds the ball comfortably rather than
+ * wedging it against the core.
+ */
+function gimmickVault(world) {
+  const G = LAYOUT.gimmick;
+
+  /* A mouth of 0.3 of a turn: 32 units of opening on the outer ring and 16 on the
+     inner, both far wider than the ball, so a lined-up pair is a real shot rather
+     than a lucky one. */
+  const MOUTH = 0.30;
+
+  const outer = arc(G.cx, G.cy, 17, 0, (1 - MOUTH) * TAU, {
+    id: 'vault-outer',
+    thick: 1.1,
+    restitution: 0.46,
+    friction: 0.02,
+    meta: { role: 'gimmick', kind: 'vaultRing', ring: 'outer' }
+  });
+
+  const inner = arc(G.cx, G.cy, 8.5, 0.5 * TAU, (1 - MOUTH) * TAU, {
+    id: 'vault-inner',
+    thick: 1.1,
+    restitution: 0.5,
+    friction: 0.02,
+    meta: { role: 'gimmick', kind: 'vaultRing', ring: 'inner' }
+  });
+
+  /* The prize for threading both. A sensor, not a bumper: a kicking core would
+     fire the ball straight back out through the mouth it came in by, which reads
+     as being rejected rather than rewarded. */
+  const core = sensorCircle(G.cx, G.cy, 3.4, {
+    id: 'vault-core',
+    cooldownFor: 0.5,
+    meta: { role: 'gimmick', kind: 'vaultCore' }
+  });
+
+  world.add(outer, inner, core);
+
+  const state = {
+    /* Opposite directions and deliberately not a round ratio, so the alignment
+       drifts rather than repeating on a short cycle the player can memorise. */
+    outerOmega: 0.62,
+    innerOmega: -0.97,
+    opens: 0
+  };
+
+  const spin = (c, by) => { c.a0 = wrapAngle(c.a0 + by); };
+
+  return {
+    id: 'vault',
+    label: 'Raid Vault',
+    colliders: [outer, inner, core],
+    rotors: [],
+    fields: [],
+    state,
+    rings: { outer, inner },
+
+    /** True while both mouths overlap, which is the shot. */
+    get aligned() {
+      const gap = Math.abs(wrapAngle(outer.a0 - inner.a0));
+      const span = MOUTH * TAU;
+      return gap < span || gap > TAU - span;
+    },
+
+    update(dt) {
+      const boost = 1 + Math.min(state.opens, 6) * 0.09;
+      spin(outer, state.outerOmega * boost * dt);
+      spin(inner, state.innerOmega * boost * dt);
+    },
+
+    /** game.js calls this when the core is hit, which winds the rings up. */
+    open() { state.opens++; },
+
+    reset() {
+      state.opens = 0;
+      outer.a0 = 0;
+      inner.a0 = wrapAngle(0.5 * TAU);
+    }
+  };
+}
+
 const GIMMICKS = {
   herd: gimmickHerd,
+  vault: gimmickVault,
   orbit: gimmickOrbit,
   updraft: gimmickUpdraft,
   bloom: gimmickBloom,

@@ -22,14 +22,16 @@ export const SHINY_DIR = 'shiny';
 /**
  * The creature sets, in dex order.
  *
- * Elemental Awakening splits species and stats across two files; Galactic
- * Adventures carries both in one row, so `statsCsv` is null and the same records
- * are used for the join. That difference lives here rather than in the loader.
+ * Elemental Awakening splits species and stats across two files; the others carry
+ * both on one row, so `statsCsv` is null and the same records are used for the
+ * join. Exclusives is spread over three files in Search and Go, which is why
+ * `csvs` is a list — they are one set here regardless of how they are filed
+ * there.
  *
- * `order` keeps the two dexes from interleaving. Both sets number their
- * `id_output` from 1, so sorting on that alone would shuffle them together.
+ * `order` keeps the dexes from interleaving. Every set numbers its `id_output`
+ * from 1, so sorting on that alone would shuffle them together.
  *
- * Both sets share `images/` and `shiny/`. Their sprite filenames are disjoint —
+ * All sets share `images/` and `shiny/`. Their sprite filenames are disjoint —
  * tools\downscale-sprites.ps1 refuses to run if that ever stops being true — and
  * one flat folder per variant keeps Species.imagePath a plain filename join.
  */
@@ -39,7 +41,7 @@ export const SETS = {
     order: 0,
     name: 'Elemental Awakening',
     short: 'Awakening',
-    csv: 'Elemental Awakening Creatures.csv',
+    csvs: ['Elemental Awakening Creatures.csv'],
     statsCsv: 'Elemental Awakening Creatures Stats and Moves.csv'
   },
   ga: {
@@ -47,8 +49,44 @@ export const SETS = {
     order: 1,
     name: 'Galactic Adventures',
     short: 'Galactic',
-    csv: 'Galactic Adventures.csv',
-    statsCsv: null
+    csvs: ['Galactic Adventures.csv'],
+    statsCsv: null,
+    /**
+     * This set is earned a rarity tier at a time, so its members are filtered at
+     * roll time against what the player has unlocked. Flagged here rather than
+     * named in rollEncounter, so a set gated some other way — Exclusives is gated
+     * as a whole table — is not accidentally caught by the same rule.
+     */
+    rarityLadder: true
+  },
+  ex: {
+    key: 'ex',
+    order: 2,
+    name: 'Exclusives',
+    short: 'Exclusive',
+    csvs: [
+      'Raid Exclusive - Search and Go.csv',
+      'Exclusives2.csv'
+    ],
+    /**
+     * The table's legendaries, filed separately at source and kept separate here.
+     *
+     * Listing them rather than picking rarity 5 out of the ordinary files is what
+     * lets the rest of the set be rescaled all the way down: the three creatures
+     * that were Legendary in the raid files become ordinary Epic catches, because
+     * these five are the legendaries now.
+     */
+    bossCsvs: ['Exclusives3.csv'],
+    statsCsv: null,
+    /**
+     * Exclusives were raid rewards in Search and Go, so nothing in the set is
+     * common there: the catchable files only use rarities 3 to 5. Left alone, the
+     * whole set would sit in the rarest buckets and almost never be rolled.
+     *
+     * `remapRarity` rescales them onto the full 1-4 range instead. See
+     * remapSetRarities for how the shape is chosen.
+     */
+    remapRarity: true
   }
 };
 
@@ -100,6 +138,106 @@ export function nextGalacticUnlock(baseRegistered) {
 export function galacticGateRarity(sp) {
   if (!sp || sp.setKey !== 'ga') return 0;
   return effectiveRarityOf(sp);
+}
+
+/* ---------------------------------------------------------------
+   Unlocking the Raid Vault
+   --------------------------------------------------------------- */
+
+/**
+ * The Exclusives table opens on total registrations across the first two sets.
+ *
+ * A whole table rather than a rarity tier, so it is one threshold rather than a
+ * ladder. 100 of the 156 in Elemental Awakening and Galactic Adventures together
+ * means the player has finished the base set and made real progress into the one
+ * it unlocks — which is the point at which a third thing to do is welcome rather
+ * than a distraction.
+ *
+ * Counted across both, not either: it is the reward for the pair of them.
+ */
+export const VAULT_UNLOCK_REGISTERED = 100;
+
+/** The sets that count towards it. Exclusives cannot unlock itself. */
+export const VAULT_UNLOCK_SETS = ['ea', 'ga'];
+
+/** The mode key the threshold gates. */
+export const VAULT_MODE = 'Exclusives';
+
+export const vaultUnlocked = registered =>
+  (Math.max(0, Math.round(Number(registered) || 0))) >= VAULT_UNLOCK_REGISTERED;
+
+/* ---------------------------------------------------------------
+   Rescaling a set's rarities
+   --------------------------------------------------------------- */
+
+/**
+ * Target share of each rarity in a rescaled set, measured off the game's own
+ * pools rather than invented.
+ *
+ * Across Elemental Awakening and Galactic Adventures the 72 catchable first
+ * stages sit at 23 Common, 19 Uncommon, 19 Rare, 11 Epic — so roughly
+ * 32 / 26 / 26 / 15 per cent. A rescaled set is cut to the same shape, which is
+ * what keeps the Vault feeling like the rest of the game rather than a pile of
+ * Epics.
+ */
+export const RARITY_SHAPE = { 1: 0.32, 2: 0.26, 3: 0.26, 4: 0.16 };
+
+/**
+ * Rescale one set's first-stage rarities onto the full 1-4 range.
+ *
+ * Exclusives were raid rewards, so the source files only use 3, 4 and 5. Shifting
+ * them down by two would leave nothing at Epic and nothing to chase; picking new
+ * rarities by hand would be 25 numbers to maintain against a CSV that can change.
+ *
+ * So it is a rule instead: rank the set's catchable first stages by source rarity
+ * and then by stat total, and cut that ranking into buckets sized by
+ * RARITY_SHAPE. Ranking by rarity first preserves the source's own ordering — a
+ * source Legendary can never come out commoner than a source Rare — and the stat
+ * total breaks ties within a tier the same way the boss promotions do. The id is
+ * the final tiebreak so the order is total and the result is identical on every
+ * load.
+ *
+ * Anything from the set's `bossCsvs` is left alone. Those are the table's
+ * legendaries and are never rolled, so they keep rarity 5 — which is also what
+ * frees the three source Legendaries in the catchable files to come down to Epic.
+ */
+function remapSetRarities(species, setKey) {
+  const ranked = species
+    .filter(sp => sp.setKey === setKey && sp.stage === 1 && sp.rarity && !sp.setBoss)
+    .sort((a, b) =>
+      (a.rarity - b.rarity) ||
+      (statTotal(a) - statTotal(b)) ||
+      a.id.localeCompare(b.id));
+
+  if (!ranked.length) return;
+
+  /* Largest-remainder, so the buckets always add back up to the set size however
+     the shares round. Taking Math.round on each independently does not. */
+  const n = ranked.length;
+  const tiers = [1, 2, 3, 4];
+  const exact = tiers.map(r => n * RARITY_SHAPE[r]);
+  const sizes = exact.map(Math.floor);
+  let left = n - sizes.reduce((s, v) => s + v, 0);
+
+  const order = exact
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (let k = 0; left > 0; k++, left--) sizes[order[k % order.length].i]++;
+
+  let at = 0;
+  tiers.forEach((r, i) => {
+    for (let k = 0; k < sizes[i]; k++, at++) {
+      ranked[at].sourceRarity = ranked[at].rarity;
+      ranked[at].rarity = r;
+    }
+  });
+
+  // Anything left over by a rounding accident keeps the last tier rather than
+  // being dropped from the pools entirely.
+  for (; at < n; at++) {
+    ranked[at].sourceRarity = ranked[at].rarity;
+    ranked[at].rarity = 4;
+  }
 }
 
 /* ---------------------------------------------------------------
@@ -172,12 +310,47 @@ export const MODES = {
     colour: '#ffb865',
     deep: '#4a2f10',
     ink: '#0b1024'
+  },
+
+  /**
+   * The sixth table, and the first that is not a type.
+   *
+   * Its pool is a whole *set* rather than a type, so its creatures span all five
+   * types — which is the point of it. That is why `type` is null and `set` is
+   * filled in: buildPools reads one or the other, and every view that used to
+   * assume "mode key = species type" now asks the mode.
+   */
+  Exclusives: {
+    type: null,
+    set: 'ex',
+    name: 'Raid Vault',
+    blurb: 'Two rotating vault rings. Every creature here is a raid exclusive.',
+    gimmick: 'vault',
+    colour: '#ff6f9c',
+    deep: '#4d1230',
+    ink: '#0b1024'
   }
 };
 
-/* The key is what matches a species' `Type` column, so finaliseModes()
-   stamps `type` from the key at load time rather than trusting the literal
-   above — a typo there would silently empty a mode's catch pool. */
+/**
+ * Every playable table, in carousel order.
+ *
+ * Kept separate from TYPES because the two stopped being the same thing when the
+ * Exclusives table arrived. TYPES is what a *creature* is; MODE_KEYS is what you
+ * can *play*. Conflating them is how a sixth table would silently acquire a
+ * species type it does not have.
+ */
+export const MODE_KEYS = [...TYPES, 'Exclusives'];
+
+/** The set a mode draws its pool from, or null if it draws from a type. */
+export const modeSet = key => MODES[key]?.set || null;
+
+/** The species type a mode is built around, or null for a set-based table. */
+export const modeType = key => MODES[key]?.type || null;
+
+/* For type tables the key is also what matches a species' `Type` column, so
+   finaliseModes() stamps `type` from the key at load time rather than trusting
+   the literal above — a typo there would silently empty a mode's catch pool. */
 
 /* ---------------------------------------------------------------
    Rarity
@@ -219,11 +392,15 @@ export const BOSS_OVERRIDES = {
 };
 
 /**
- * A second boss per type, from Galactic Adventures, unlocked by beating that
- * type's Elemental boss. With both available the gate picks between them at
- * even odds, so neither becomes the only thing left to fight.
+ * The gate picks uniformly among whichever legendaries a table currently has.
+ *
+ * Uniform rather than a table of weights, because that already produces both
+ * rules asked for and cannot drift out of step with the number of candidates: a
+ * type table with its Elemental and Galactic legendaries unlocked is 50/50, and
+ * the Raid Vault with its five is 20% each. A seventh would be 1 in 7 without
+ * anyone having to remember to change a constant.
  */
-export const GALACTIC_BOSS_ODDS = 0.5;
+export const bossOddsFor = count => (count > 0 ? 1 / count : 0);
 
 /** Shiny rate, matching Search and Go's baseline wild odds. */
 export const SHINY_ODDS = 0.01;
@@ -361,6 +538,9 @@ export const SCORE = {
   saucer: 2_500,
   discUpgrade: 5_000,
   gimmick: 800,
+  /* The Raid Vault core: both rings threaded while their mouths lined up. Priced
+     with completing the target bank, because it asks for at least as much. */
+  vaultCore: 7_500,
   captureHit: 1_200,
   captureRarity: { 1: 12_000, 2: 25_000, 3: 50_000, 4: 90_000, 5: 400_000 },
   captureShinyBonus: 100_000,
@@ -611,7 +791,8 @@ export function rollEncounter(type, { minRarity = 0, galacticRarities = [] } = {
    * are always reweighted against what is actually reachable.
    */
   const open = new Set(galacticRarities);
-  const reachable = sp => sp.setKey === BASE_SET || open.has(sp.effectiveRarity);
+  const reachable = sp =>
+    !SETS[sp.setKey]?.rarityLadder || open.has(sp.effectiveRarity);
 
   const buckets = {};
   for (const r of Object.keys(RARITY_WEIGHTS).map(Number)) {
@@ -641,21 +822,36 @@ export const bossOfSet = (setKey, type) => DB.bosses.get(setKey)?.get(type) || n
 /** The Galactic boss for a type, which beating the Elemental one unlocks. */
 export const galacticBossOf = type => bossOfSet('ga', type);
 
+/** Every legendary a table can ever field, available or not. */
+export function allBossesForMode(modeKey) {
+  const mode = MODES[modeKey];
+  if (!mode) return [];
+
+  // A set-based table fields that set's legendary for every type: the Raid
+  // Vault's five come from the one file, one per type.
+  if (mode.set) return TYPES.map(t => bossOfSet(mode.set, t)).filter(Boolean);
+
+  const owned = setsOwnedByAMode();
+  return SET_KEYS
+    .filter(k => !owned.has(k))
+    .map(k => bossOfSet(k, mode.type))
+    .filter(Boolean);
+}
+
 /**
- * Every boss a type's gate could produce right now.
+ * Every legendary a table's gate could produce right now.
  *
- * Returned as a list rather than pre-rolled so the caller owns the randomness —
- * which is what lets the tests pin it down.
+ * Returned as a list rather than pre-rolled so the caller owns the randomness,
+ * which is what lets the tests pin it down. On a type table the Galactic
+ * legendary has to be earned; the Raid Vault's five are all available at once,
+ * because the table itself is what had to be earned.
  */
-export function bossChoicesFor(type, { galacticUnlocked = false } = {}) {
-  const out = [];
-  const base = bossOf(type);
-  if (base) out.push(base);
-  if (galacticUnlocked) {
-    const ga = galacticBossOf(type);
-    if (ga) out.push(ga);
-  }
-  return out;
+export function bossChoicesFor(modeKey, { galacticUnlocked = false } = {}) {
+  const mode = MODES[modeKey];
+  if (!mode) return [];
+  const all = allBossesForMode(modeKey);
+  if (mode.set) return all;
+  return all.filter(b => b.setKey === BASE_SET || galacticUnlocked);
 }
 
 /** Every creature a mode can produce, boss included. Used by the Collection. */
@@ -671,6 +867,17 @@ export const speciesOfSet = setKey => DB.species.filter(s => s.setKey === setKey
    --------------------------------------------------------------- */
 
 export const STAT_KEYS = ['hp', 'attack', 'defence', 'speed'];
+
+/**
+ * Summed base stats, and 0 when a species has none.
+ *
+ * Added up here rather than read from the CSVs' own Total column, which is not
+ * reliable across the sets — some rows carry the family's total rather than their
+ * own. Everything that ranks creatures by strength (the boss promotions, the
+ * Exclusives rarity rescale) uses this, so they all rank the same way.
+ */
+export const statTotal = sp =>
+  sp?.baseStats ? STAT_KEYS.reduce((s, k) => s + (sp.baseStats[k] || 0), 0) : 0;
 export const STAT_LABELS = { hp: 'HP', attack: 'Attack', defence: 'Defence', speed: 'Speed' };
 
 function readStats(row, name) {
@@ -818,41 +1025,42 @@ function buildFamilies() {
 }
 
 /**
- * Encounter pools and bosses, per type.
+ * Sets that belong to one table rather than feeding the five type tables.
  *
- * A promoted boss is removed from its rarity bucket in the same pass that
- * appoints it, so Alpakina and Verdanthorn cannot turn up as an ordinary
- * Epic catch in the mode they now guard.
+ * Derived from MODES rather than flagged on the set, so there is one source of
+ * truth. Without this, Exclusives creatures would also turn up in the ordinary
+ * type tables, because they carry real types.
  */
-function buildPools() {
+const setsOwnedByAMode = () =>
+  new Set(MODE_KEYS.map(k => MODES[k]?.set).filter(Boolean));
+
+/**
+ * The legendary each set fields for each type.
+ *
+ * Every set has one per type, either because the source file marks it rarity 5 or
+ * because BOSS_OVERRIDES promotes one. A promoted creature is removed from the
+ * ordinary pools by buildModePools, so it cannot be both the boss and a routine
+ * catch.
+ */
+function buildBosses() {
   for (const key of SET_KEYS) DB.bosses.set(key, new Map());
 
-  for (const type of TYPES) {
-    const byRarity = { 1: [], 2: [], 3: [], 4: [] };
-    const bosses = {};
-
-    for (const sp of DB.species) {
-      if (sp.type !== type) continue;
-      if (sp.stage !== 1 || !sp.rarity) continue;   // evolved forms are earned, not caught
-      if (sp.rarity === 5) { bosses[sp.setKey] = sp; continue; }
-      if (byRarity[sp.rarity]) byRarity[sp.rarity].push(sp);
-      else DB.warnings.push(`${sp.name}: rarity ${sp.rarity} is outside 1-5`);
-    }
-
-    /* One boss per set per type. A set with no legendary of this type promotes
-       one, and a promoted creature leaves the ordinary pool in the same pass so
-       it cannot be both the boss and a routine catch. */
-    for (const key of SET_KEYS) {
-      let boss = bosses[key] || null;
+  for (const key of SET_KEYS) {
+    for (const type of TYPES) {
+      /* A set that files its legendaries separately is believed over rarity: after
+         the rescale the catchable files hold no rarity 5 at all, and relying on
+         that having already happened would be a load-order trap. */
+      const mine = sp => sp.setKey === key && sp.type === type && sp.stage === 1;
+      let boss =
+        DB.species.find(sp => mine(sp) && sp.setBoss) ||
+        DB.species.find(sp => mine(sp) && sp.rarity === 5) ||
+        null;
 
       if (!boss) {
         const name = BOSS_OVERRIDES[key]?.[type];
         const promoted = name ? speciesByName(name) : null;
         if (promoted && promoted.type === type && promoted.setKey === key) {
           boss = promoted;
-          for (const r of Object.keys(byRarity)) {
-            byRarity[r] = byRarity[r].filter(s => s.id !== promoted.id);
-          }
         } else if (name) {
           DB.warnings.push(
             `${SETS[key].name}: boss override "${name}" for ${type} is missing, ` +
@@ -866,8 +1074,40 @@ function buildPools() {
       if (boss) boss.promotedBoss = boss.rarity !== 5;
       DB.bosses.get(key).set(type, boss);
     }
+  }
+}
 
-    DB.pools.set(type, byRarity);
+/**
+ * Encounter pools, one per playable table.
+ *
+ * A type table draws every creature of its type from the sets that feed type
+ * tables; the Exclusives table draws its whole set regardless of type. Bosses are
+ * excluded here rather than at roll time, so a legendary can never turn up as an
+ * ordinary catch in the table it guards.
+ */
+function buildModePools() {
+  const owned = setsOwnedByAMode();
+
+  const bossIds = new Set();
+  for (const key of SET_KEYS) {
+    for (const boss of DB.bosses.get(key).values()) if (boss) bossIds.add(boss.id);
+  }
+
+  for (const key of MODE_KEYS) {
+    const mode = MODES[key];
+    const byRarity = { 1: [], 2: [], 3: [], 4: [] };
+
+    for (const sp of DB.species) {
+      const mine = mode.set ? sp.setKey === mode.set
+                            : (sp.type === mode.type && !owned.has(sp.setKey));
+      if (!mine) continue;
+      if (sp.stage !== 1 || !sp.rarity) continue;   // evolved forms are earned, not caught
+      if (sp.rarity === 5 || bossIds.has(sp.id)) continue;
+      if (byRarity[sp.rarity]) byRarity[sp.rarity].push(sp);
+      else DB.warnings.push(`${sp.name}: rarity ${sp.rarity} is outside 1-5`);
+    }
+
+    DB.pools.set(key, byRarity);
   }
 }
 
@@ -907,20 +1147,31 @@ export async function loadDatabase({ sets = SET_KEYS } = {}) {
 
   const loaded = await Promise.all(wanted.map(async key => {
     const set = SETS[key];
+    const bossCsvs = set.bossCsvs || [];
     try {
-      const [csvText, statsText] = await Promise.all([
-        fetchText(set.csv),
+      const [texts, bossTexts, statsText] = await Promise.all([
+        Promise.all(set.csvs.map(fetchText)),
+        Promise.all(bossCsvs.map(fetchText)),
         set.statsCsv ? fetchText(set.statsCsv) : Promise.resolve(null)
       ]);
 
-      const records = toRecords(parseCSV(csvText));
-      if (!records.length) throw new Error(`"${set.csv}" has no data rows`);
+      /* A set can be spread over several files — Exclusives is three. They are
+         concatenated in the order listed, so the dex reads the way the files do,
+         with the legendaries last. */
+      const records = texts.flatMap(t => toRecords(parseCSV(t)));
+      const bossRecords = bossTexts.flatMap(t => toRecords(parseCSV(t)));
+      if (!records.length) throw new Error(`${set.name} has no data rows`);
 
-      // Galactic Adventures carries its stats on the same row, so the records
-      // join against themselves.
-      const statsRecords = statsText ? toRecords(parseCSV(statsText)) : records;
+      // Only Elemental Awakening files its stats separately; the rest carry them
+      // on the same row, so the records join against themselves.
+      const all = records.concat(bossRecords);
+      const statsRecords = statsText ? toRecords(parseCSV(statsText)) : all;
 
-      return { key, species: buildSpecies(records, statsRecords, set) };
+      const species = buildSpecies(records, statsRecords, set);
+      const bosses = buildSpecies(bossRecords, statsRecords, set);
+      for (const sp of bosses) sp.setBoss = true;
+
+      return { key, species: species.concat(bosses) };
     } catch (e) {
       if (key === BASE_SET) throw e;
       DB.warnings.push(`${set.name} could not be loaded, so it is unavailable: ${e.message}`);
@@ -928,9 +1179,20 @@ export async function loadDatabase({ sets = SET_KEYS } = {}) {
     }
   }));
 
+  /**
+   * Dex order: sets in `order`, and within a set the order its files list.
+   *
+   * `order` is renumbered rather than trusted, because a multi-file set restarts
+   * its numbering in every file — Exclusives runs 1-19, then 20-44, then 1-5 for
+   * the legendaries. Sorting on the id's trailing digits would drop those five
+   * bosses in among the first five raid creatures. Renumbering makes "the order
+   * the files are listed in" the single rule, which for the single-file sets is
+   * exactly what they had before.
+   */
   DB.species = loaded
     .sort((a, b) => SETS[a.key].order - SETS[b.key].order)
-    .flatMap(l => l.species.sort((a, b) => (a.order - b.order) || a.id.localeCompare(b.id)));
+    .flatMap(l => l.species);
+  DB.species.forEach((sp, i) => { sp.order = i + 1; });
 
   /* Ids and names have to be unique across sets, because everything downstream
      — the save file most of all — keys on them. A clash would silently merge two
@@ -960,7 +1222,16 @@ export async function loadDatabase({ sets = SET_KEYS } = {}) {
 
   linkEvolutions();
   buildFamilies();
-  buildPools();
+
+  /* Rescaling has to happen before the pools are cut, and after the families are
+     linked so an evolved form inherits the rescaled rarity rather than the
+     source one. */
+  for (const key of SET_KEYS) {
+    if (SETS[key].remapRarity) remapSetRarities(DB.species, key);
+  }
+
+  buildBosses();
+  buildModePools();
   stampRarities();
 
   DB.loaded = true;

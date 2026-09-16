@@ -30,7 +30,11 @@
 param(
     [string]   $Source = 'C:\Users\sandr\Downloads\Search and Go',
     [int]      $Size   = 256,
-    [string[]] $Sets   = @('Elemental Awakening Creatures.csv', 'Galactic Adventures.csv'),
+    [string[]] $Sets   = @('Elemental Awakening Creatures.csv',
+                           'Galactic Adventures.csv',
+                           'Raid Exclusive - Search and Go.csv',
+                           'Exclusives2.csv',
+                           'Exclusives3.csv'),
     [switch]   $Force
 )
 

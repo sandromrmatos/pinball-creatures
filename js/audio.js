@@ -180,6 +180,12 @@ export class Audio {
         this._blip({ freq: 780 + Math.random() * 180, dur: 0.035, type: 'square', gain: 0.16 });
         break;
 
+      /* The Raid Vault core. A lock turning over: the hardest shot on the table
+         deserves to sound like it opened something rather than like a bumper. */
+      case 'vault':
+        this._arp([392, 587, 784, 1175], { step: 0.06, dur: 0.2, type: 'triangle', gain: 0.3 });
+        break;
+
       case 'target':
         this._blip({ freq: 1180, to: 880, dur: 0.06, type: 'square', gain: 0.30 });
         break;

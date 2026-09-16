@@ -27,6 +27,8 @@
   --t-wind: #56d2f0;
   --t-celestial: #4ade80;
   --t-mechanic: #ffb865;
+  /* Not a creature type: the Raid Vault's own colour, mirroring MODES.Exclusives. */
+  --t-exclusives: #ff6f9c;
 
   /* rarity */
   --r1: #9aa3bd;
@@ -364,6 +366,8 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
 .t-Wind { color: var(--t-wind); }
 .t-Celestial { color: var(--t-celestial); }
 .t-Mechanic { color: var(--t-mechanic); }
+/* The Raid Vault's creatures span every type, so its tag has no single one. */
+.t-any { color: var(--t-exclusives); }
 
 .prog { height: 5px; border-radius: 5px; background: #222c52; overflow: hidden; margin: 8px 0 12px; }
 .prog i { display: block; height: 100%; transition: width .3s ease; }
@@ -375,7 +379,7 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
 /* Which creature set. Above the type tabs, because it is the wider choice. */
 .set-tabs {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   margin-bottom: 6px;
 }
@@ -691,9 +695,16 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
 .mode-card .mc-top b { color: var(--mode); font-size: 14.5px; }
 .mode-card p { margin: 4px 0 6px; }
 .mode-card .mc-foot { display: flex; align-items: center; gap: 10px; }
-.mc-boss { margin-left: auto; }
+/* One to five legendaries, so the row shrinks them rather than overflowing. */
+.mc-bosses { margin-left: auto; display: flex; gap: 2px; }
 .mc-boss img { width: 30px; height: 30px; object-fit: contain; filter: brightness(0) opacity(.4); }
 .mc-boss.got img { filter: none; }
+.mc-bosses .mc-boss:nth-child(n+3) img { width: 22px; height: 22px; }
+
+/* A table that has not been earned yet. */
+.mode-card.sealed { opacity: .62; border-style: dashed; }
+.mode-card.sealed .mc-top b { color: var(--muted); }
+.mc-locked { margin: 4px 0 0; color: var(--muted); border-left: 2px solid var(--r4); padding-left: 7px; }
 
 .shift-grid { display: grid; grid-template-columns: 1fr 1fr; }
 .shift-card {

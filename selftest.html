@@ -42,9 +42,11 @@ import {
   MAX_DISC_TIER, MAX_MULTIPLIER, GATE_CATCHES_NEEDED, EVOLUTION_SHARDS,
   EXTRA_BALL_AT, SCORE, BALLS_PER_GAME,
   CAPTURE_BALL_SAVE_SECONDS, SHINY_ODDS, SHINY_DOUBLE_AT,
-  SETS, SET_KEYS, BASE_SET, GALACTIC_UNLOCKS, GALACTIC_BOSS_ODDS,
+  SETS, SET_KEYS, BASE_SET, GALACTIC_UNLOCKS, bossOddsFor,
   speciesOfSet, speciesOfType, bossOfSet, galacticBossOf, bossChoicesFor,
-  galacticRaritiesUnlocked, nextGalacticUnlock, evolutionTargets
+  galacticRaritiesUnlocked, nextGalacticUnlock, evolutionTargets,
+  MODE_KEYS, modeSet, modeType, allBossesForMode, statTotal, RARITY_SHAPE,
+  VAULT_UNLOCK_REGISTERED, VAULT_UNLOCK_SETS, VAULT_MODE, vaultUnlocked
 } from './js/data.js';
 
 import {
@@ -118,9 +120,14 @@ async function run() {
   group('loadDatabase');
   await loadDatabase();
 
-  check('156 species loaded across both sets', DB.species.length === 156, `got ${DB.species.length}`);
+  check('205 species loaded across all sets', DB.species.length === 205, `got ${DB.species.length}`);
   check('79 from Elemental Awakening', speciesOfSet('ea').length === 79, `got ${speciesOfSet('ea').length}`);
   check('77 from Galactic Adventures', speciesOfSet('ga').length === 77, `got ${speciesOfSet('ga').length}`);
+  check('49 Exclusives', speciesOfSet('ex').length === 49, `got ${speciesOfSet('ex').length}`);
+  check('six playable tables', MODE_KEYS.length === 6, MODE_KEYS.join(','));
+  check('five of them are types', MODE_KEYS.filter(k => modeType(k)).length === 5);
+  check('one of them is a set', MODE_KEYS.filter(k => modeSet(k)).length === 1,
+        MODE_KEYS.filter(k => modeSet(k)).join(','));
   check('every type key has a mode', TYPES.every(t => MODES[t] && MODES[t].type === t));
   check('no rarity 5 in RARITY_WEIGHTS', !(5 in RARITY_WEIGHTS));
 
@@ -159,10 +166,10 @@ async function run() {
   group('catchable split');
   {
     const bosses = DB.species.filter(s => s.isBoss);
-    check('10 bosses, one per mode per set', bosses.length === 10,
+    check('15 bosses, one per type per set', bosses.length === 15,
           `got ${bosses.length}: ${bosses.map(b => b.name).join(', ')}`);
 
-    for (const [key, stage1, evoOnly] of [['ea', 42, 37], ['ga', 40, 37]]) {
+    for (const [key, stage1, evoOnly] of [['ea', 42, 37], ['ga', 40, 37], ['ex', 30, 19]]) {
       const mine = speciesOfSet(key);
       const s1 = mine.filter(s => s.stage === 1);
       const catchable = mine.filter(s => s.isCatchable);
@@ -190,6 +197,12 @@ async function run() {
       ga: {
         Mystic: 'Pantheraura', Wind: 'Electrogriff', Celestial: 'Starraffe',
         Mechanic: 'Metalmagma', Neutral: BOSS_OVERRIDES.ga.Neutral
+      },
+      /* The Raid Vault's five come from one file, one per type, so it needs no
+         override at all. */
+      ex: {
+        Mystic: 'Necrosmion', Wind: 'Origamiros', Neutral: 'Aprorok',
+        Celestial: 'Yerba', Mechanic: 'Terravoltz'
       }
     };
 
@@ -222,7 +235,7 @@ async function run() {
 
   group('encounter pools');
   {
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const pool = DB.pools.get(t);
       const flat = Object.values(pool).flat();
       const bossIds = SET_KEYS.map(k => bossOfSet(k, t)?.id).filter(Boolean);
@@ -252,7 +265,7 @@ async function run() {
 
   group('rollEncounter');
   {
-    /* With nothing unlocked, only the base set may ever appear. */
+    /* With nothing unlocked, only the base set may ever appear on a type table. */
     for (const t of TYPES) {
       let bad = 0;
       const seen = new Set();
@@ -315,7 +328,7 @@ async function run() {
     {
       const all = [1, 2, 3, 4];
       const seen = new Set();
-      for (const t of TYPES) {
+      for (const t of MODE_KEYS) {
         for (let i = 0; i < 20000; i++) {
           const sp = rollEncounter(t, { galacticRarities: all });
           if (sp) seen.add(sp.id);
@@ -362,6 +375,120 @@ async function run() {
     }
   }
 
+  /**
+   * The Exclusives set and the Raid Vault it feeds.
+   *
+   * Two things to pin down. The rescale has to land on the game's own rarity shape
+   * without ever inverting the source's ordering, and the set has to stay out of
+   * the five type tables — its creatures carry real types, so leaking is the easy
+   * mistake.
+   */
+  group('exclusives: the rescaled set');
+  {
+    const ex = speciesOfSet('ex');
+    const pool = DB.pools.get(VAULT_MODE);
+    const flat = Object.values(pool).flat();
+
+    check('the Vault is a set table', modeSet(VAULT_MODE) === 'ex', String(modeSet(VAULT_MODE)));
+    check('and has no single type', modeType(VAULT_MODE) === null);
+
+    /* ---- nothing at rarity 5 outside the boss file ---- */
+    const stray = ex.filter(s => s.stage === 1 && s.rarity === 5 && !s.setBoss);
+    check('no catchable Exclusive is left at Legendary', stray.length === 0,
+          stray.map(s => s.name).join(','));
+    check('the five legendaries are the ones filed as such',
+          ex.filter(s => s.setBoss).length === 5, String(ex.filter(s => s.setBoss).length));
+
+    /* ---- the rescale hits the intended shape ---- */
+    const counts = [1, 2, 3, 4].map(r => (pool[r] || []).length);
+    check('25 catchables in the Vault', counts.reduce((a, b) => a + b, 0) === 25,
+          counts.join('+'));
+    check('rescaled to 8/7/6/4', counts.join('/') === '8/7/6/4', counts.join('/'));
+    note('Vault pool by rarity: ' + counts.join(' / ') +
+         '  target shape ' + [1, 2, 3, 4].map(r => RARITY_SHAPE[r]).join(' / '));
+
+    /* ---- and never inverts the source ordering ---- */
+    let inversions = 0;
+    for (const a of flat) {
+      for (const b of flat) {
+        if (a.rarity < b.rarity && a.sourceRarity > b.sourceRarity) inversions++;
+      }
+    }
+    check('the source ordering is preserved', inversions === 0, String(inversions));
+
+    const bySource = {};
+    for (const s of flat) {
+      const k = `src${s.sourceRarity}`;
+      bySource[k] = bySource[k] || [];
+      if (!bySource[k].includes(s.rarity)) bySource[k].push(s.rarity);
+    }
+    note('source rarity -> new rarity: ' +
+         Object.keys(bySource).sort().map(k => `${k}->${bySource[k].sort().join(',')}`).join('  '));
+
+    /* ---- the set stays out of the type tables ---- */
+    for (const t of TYPES) {
+      const leak = Object.values(DB.pools.get(t)).flat().filter(s => s.setKey === 'ex');
+      check(`${t} does not draw Exclusives`, leak.length === 0,
+            leak.map(s => s.name).join(','));
+    }
+
+    /* ---- and the Vault draws nothing else ---- */
+    check('the Vault draws only Exclusives', flat.every(s => s.setKey === 'ex'),
+          flat.filter(s => s.setKey !== 'ex').map(s => s.name).join(','));
+    check('every type is represented in it',
+          TYPES.every(t => flat.some(s => s.type === t)),
+          TYPES.filter(t => !flat.some(s => s.type === t)).join(','));
+    check('its pool is all first stages', flat.every(s => s.stage === 1));
+    check('and excludes its own legendaries', !flat.some(s => s.setBoss));
+
+    /* ---- rolling it produces only Exclusives, whatever the Galactic ladder says ---- */
+    const seen = new Set();
+    let bad = 0;
+    for (let i = 0; i < 8000; i++) {
+      const sp = rollEncounter(VAULT_MODE);
+      if (!sp) { bad++; continue; }
+      if (sp.setKey !== 'ex' || sp.stage !== 1 || sp.setBoss) { bad = -1; break; }
+      seen.add(sp.id);
+    }
+    check('the Vault rolls only its own creatures', bad === 0, `bad=${bad}`);
+    check('and reaches all 25 of them', seen.size === 25, `${seen.size}/25`);
+    check('with no Galactic unlocks needed',
+          rollEncounter(VAULT_MODE, { galacticRarities: [] }) !== null);
+  }
+
+  group('exclusives: five legendaries at one in five');
+  {
+    const all = allBossesForMode(VAULT_MODE);
+    check('the Vault fields five legendaries', all.length === 5, String(all.length));
+    check('one per type', TYPES.every(t => all.some(b => b.type === t)),
+          all.map(b => b.type).join(','));
+    check('all from the Exclusives set', all.every(b => b.setKey === 'ex'));
+    check('all read as Legendary', all.every(b => b.effectiveRarity === 5));
+    check('none of them promoted', all.every(b => b.promotedBoss === false),
+          all.filter(b => b.promotedBoss).map(b => b.name).join(','));
+
+    /* All five are available at once: the table itself was the thing to earn. */
+    const locked = bossChoicesFor(VAULT_MODE, { galacticUnlocked: false });
+    const open = bossChoicesFor(VAULT_MODE, { galacticUnlocked: true });
+    check('all five are offered without any further unlock', locked.length === 5,
+          String(locked.length));
+    check('and the Galactic unlock is irrelevant here', open.length === 5);
+
+    check('one in five each', Math.abs(bossOddsFor(5) - 0.2) < 1e-9, String(bossOddsFor(5)));
+    check('and one in two on a type table', Math.abs(bossOddsFor(2) - 0.5) < 1e-9);
+  }
+
+  group('exclusives: the table has to be earned');
+  {
+    check(`the threshold is ${VAULT_UNLOCK_REGISTERED}`,
+          VAULT_UNLOCK_REGISTERED === 100, String(VAULT_UNLOCK_REGISTERED));
+    check('counted across the first two sets only',
+          VAULT_UNLOCK_SETS.join() === 'ea,ga', VAULT_UNLOCK_SETS.join());
+    check('99 is not enough', vaultUnlocked(99) === false);
+    check('100 opens it', vaultUnlocked(100) === true);
+    check('and more still does', vaultUnlocked(205) === true);
+  }
+
   group('galactic bosses');
   {
     for (const t of TYPES) {
@@ -406,7 +533,7 @@ async function run() {
 
     // Evolution Mode needs at least one evolvable creature reachable in every
     // mode, or the mode can never light EVOLVE.
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const anyEvolvable = Object.values(DB.pools.get(t)).flat().some(s => s.evolvesToIds.length > 0);
       check(`${t} has an evolvable catchable`, anyEvolvable);
     }
@@ -418,16 +545,44 @@ async function run() {
     check('space in filename is encoded', east.imagePath === 'images/Antheara%20East.png', east.imagePath);
     check('shiny mirrors the same filename', east.shinyPath === 'shiny/Antheara%20East.png', east.shinyPath);
 
-    // Fetch every sprite: a 404 here is a blank creature on the table, and
-    // checking all 158 is cheap next to debugging one missing file later.
-    let missing = [];
-    await Promise.all(DB.species.map(async sp => {
-      for (const p of [sp.imagePath, sp.shinyPath]) {
+    /**
+     * Fetch every sprite: a 404 here is a blank creature on the table.
+     *
+     * In batches rather than all at once. There are over 400 now, and firing them
+     * all as one Promise.all buries the single-threaded test server — it starts
+     * refusing connections and the whole run dies on "Failed to fetch", which
+     * looks exactly like a missing file and is not one.
+     */
+    const paths = DB.species.flatMap(sp => [sp.imagePath, sp.shinyPath]);
+
+    /**
+     * One HEAD per sprite, in small batches, and retried once.
+     *
+     * The test server is single-threaded. Firing 400-odd requests at it flat out
+     * makes it start dropping connections, and a dropped connection surfaces as
+     * "Failed to fetch" — indistinguishable from a genuinely missing file, and it
+     * moved around between runs. Retrying separates the two: a real 404 fails
+     * twice, a busy socket does not.
+     */
+    const head = async p => {
+      try {
         const r = await fetch(p, { method: 'HEAD' });
-        if (!r.ok) missing.push(`${p} (${r.status})`);
+        return r.ok ? null : `${p} (${r.status})`;
+      } catch (e) {
+        return `${p} (${e.message})`;
       }
-    }));
-    check(`all ${DB.species.length * 2} sprites present`, missing.length === 0,
+    };
+
+    const missing = [];
+    for (let i = 0; i < paths.length; i += 8) {
+      const results = await Promise.all(paths.slice(i, i + 8).map(head));
+      for (let k = 0; k < results.length; k++) {
+        if (!results[k]) continue;
+        const again = await head(paths[i + k]);
+        if (again) missing.push(again);
+      }
+    }
+    check(`all ${paths.length} sprites present`, missing.length === 0,
           missing.slice(0, 6).join(', '));
   }
 
@@ -439,7 +594,7 @@ async function run() {
     const s = blankSave();
     check('no economy keys in the save',
           !('candy' in s) && !('xp' in s) && !('stardust' in s) && !('storage' in s));
-    check('a high score table per mode', TYPES.every(t => Array.isArray(s.highScores[t])));
+    check('a high score table per mode', MODE_KEYS.every(t => Array.isArray(s.highScores[t])));
 
     await store.init();
     await store.startFresh();
@@ -530,6 +685,35 @@ async function run() {
           store.galacticBossUnlocked('Mystic') === true);
     check('and only for that type',
           TYPES.filter(t => t !== 'Mystic').every(t => store.galacticBossUnlocked(t) === false));
+
+    /* ---- and the Raid Vault, which is gated on the two of them together ---- */
+    await store.startFresh();
+    check('the Vault is shut on a fresh save', store.modeUnlocked(VAULT_MODE) === false);
+    check('the five type tables never are',
+          TYPES.every(t => store.modeUnlocked(t) === true));
+    check('so only five tables are playable', store.unlockedModes().length === 5,
+          store.unlockedModes().join(','));
+
+    for (const sp of ea.slice(0, 60)) store.recordCapture(sp.id, { shiny: false });
+    for (const sp of ga.slice(0, 39)) store.recordCapture(sp.id, { shiny: false });
+    check('99 across the two sets is not enough', store.vaultRegistered() === 99,
+          String(store.vaultRegistered()));
+    check('and the Vault is still shut', store.modeUnlocked(VAULT_MODE) === false);
+    check('progress says how many are left', store.vaultProgress().needed === 1,
+          String(store.vaultProgress().needed));
+
+    store.recordCapture(ga[39].id, { shiny: false });
+    check('the hundredth opens it', store.modeUnlocked(VAULT_MODE) === true);
+    check('all six tables are now playable', store.unlockedModes().length === 6,
+          store.unlockedModes().join(','));
+
+    /* Exclusives must not count towards their own threshold. */
+    const before = store.vaultRegistered();
+    for (const sp of speciesOfSet('ex').slice(0, 10)) store.recordCapture(sp.id, { shiny: false });
+    check('registering Exclusives does not count towards the Vault',
+          store.vaultRegistered() === before, `${before} -> ${store.vaultRegistered()}`);
+    check('but they do count in their own set',
+          store.registeredCount(null, 'ex') === 10, String(store.registeredCount(null, 'ex')));
 
     check('shinyCount scopes to a set too',
           store.shinyCount(null, 'ea') === 0 && store.shinyCount(null, 'ga') === 0);
@@ -941,7 +1125,7 @@ async function run() {
      ===================================================== */
   group('table: builds for every mode');
   {
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const { world, parts, mode } = buildTable(t);
       check(`${t} builds`, !!world && !!parts.flippers && !!parts.saucer);
       check(`  ${t} uses the ${MODES[t].gimmick} gimmick`, parts.gimmick.id === MODES[t].gimmick,
@@ -1124,7 +1308,7 @@ async function run() {
 
     let totalStuck = 0, totalEscaped = 0, totalTested = 0, totalSkipped = 0;
 
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const stuck = [];
       const escapes = [];
       const probe = probeWorld(t);
@@ -1187,7 +1371,7 @@ async function run() {
       check(`${t}: no ball escapes the table`, escapes.length === 0, escapes.slice(0, 4).join(' '));
     }
 
-    note(`${totalTested} drops across ${TYPES.length} modes ` +
+    note(`${totalTested} drops across ${MODE_KEYS.length} modes ` +
          `(${totalSkipped} spawn points skipped as blocked): ` +
          `${totalStuck} stuck, ${totalEscaped} escaped`);
   }
@@ -1846,7 +2030,7 @@ async function run() {
    */
   group('table: a mode stands the centre down');
   {
-    for (const type of TYPES) {
+    for (const type of MODE_KEYS) {
       await store.startFresh();
       const g2 = new Game({});
       g2.start(type);
@@ -2190,7 +2374,7 @@ async function run() {
     check('both legendaries turn up', seen.ea > 0 && seen.ga > 0, JSON.stringify(seen));
 
     const share = seen.ga / (seen.ea + seen.ga);
-    check('at roughly even odds', Math.abs(share - GALACTIC_BOSS_ODDS) < 0.05, share.toFixed(3));
+    check('at roughly even odds', Math.abs(share - bossOddsFor(2)) < 0.05, share.toFixed(3));
     note(`gate picks: ${seen.ea} Awakening, ${seen.ga} Galactic (${(share * 100).toFixed(1)}% Galactic)`);
 
     /* And a Galactic boss stage actually runs and registers. */
@@ -2350,7 +2534,7 @@ async function run() {
 
   group('game: every mode has a reachable boss');
   {
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       await store.startFresh();
       const g = new Game({});
       g.start(t);
@@ -2486,17 +2670,57 @@ async function run() {
     check('declining kicks the ball out', g.phase === PHASE.PLAY && g.ball.held === false);
     check('and keeps the charge', g.run.shiftCharges === 1);
 
-    // Take the offer this time.
+    /**
+     * Saying "stay" has to mean something.
+     *
+     * The charge is kept but the offer stops being made, because keeping the
+     * charge and nothing else meant the Well asked again on the very next visit,
+     * and the next, for the rest of the ball. Every shot up the middle turned into
+     * the same dialog.
+     */
+    const offersBefore = events.filter(e => e.t === 'shiftOffer').length;
+    for (let visit = 0; visit < 3; visit++) {
+      g.ball.held = false;
+      g.ball.moveTo(LAYOUT.saucer.x, LAYOUT.saucer.y);
+      g._enterSaucer(g.ball);
+      g._lastNow += 5000;
+      g._updateSaucer(g._lastNow);
+      g._lastNow += 5000;
+      g._updateSaucer(g._lastNow);
+    }
+    check('the Well stops asking once you have said stay',
+          events.filter(e => e.t === 'shiftOffer').length === offersBefore,
+          `${events.filter(e => e.t === 'shiftOffer').length - offersBefore} more offers`);
+    check('the charge is still banked', g.run.shiftCharges === 1);
+    check('and the ball is not held hostage', g.ball.held === false);
+
+    /* Earning another charge is a new question, so the offer comes back. */
+    for (let i = 0; i < SPINS_PER_SHIFT; i++) {
+      g.world.events.push({
+        type: 'hit', id: 'spinner', collider: g.parts.spinner, ball: g.ball, normal: null, speed: 80
+      });
+      g._handleEvents();
+    }
+    check('a second charge is banked', g.run.shiftCharges === 2, String(g.run.shiftCharges));
+
+    g.ball.held = false;
+    g.ball.moveTo(LAYOUT.saucer.x, LAYOUT.saucer.y);
     g._enterSaucer(g.ball);
     g._lastNow += 5000;
     g._updateSaucer(g._lastNow);
+    check('earning another charge asks again',
+          events.filter(e => e.t === 'shiftOffer').length === offersBefore + 1);
+
     check('a bad type is refused', g.chooseShift('Nonsense') === false);
     check('shifting to the current type is refused', g.chooseShift('Neutral') === false);
     check('shifting works', g.chooseShift('Celestial') === true);
 
     check('the mode changed', g.run.type === 'Celestial' && g.mode.type === 'Celestial');
     check('the table was rebuilt', g.parts.gimmick.id === 'bloom', g.parts.gimmick.id);
-    check('the charge was spent', g.run.shiftCharges === 0);
+    // Two were banked and one was spent, so one is left.
+    check('the charge was spent', g.run.shiftCharges === 1, String(g.run.shiftCharges));
+    check('accepting clears the refusal, so the last charge is offered again',
+          g._shiftOnOffer() === true);
     check('the score carried over', g.run.score > scoreBefore, String(g.run.score));
     check('the disc carried over', g.run.discTier === 2);
     check('a new ball is served', g.phase === PHASE.PLUNGE && g.ball.held === true);
@@ -2553,7 +2777,7 @@ async function run() {
       return false;
     };
 
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const { world } = buildTable(t);
       const kickers = world.colliders.filter(c => (c.kick || 0) > 0 && inCorridor(c));
       check(`${t} has no kicker above the Well`, kickers.length === 0,
@@ -2624,7 +2848,7 @@ async function run() {
      * roughly every 0.85 s, so twenty-five seconds of it is around thirty
      * entries. Anything healthy is in single figures.
      */
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       let entries = 0;
       const g = new Game({ onEvent: (type) => { if (type === 'saucer') entries++; } });
       g.start(t);
@@ -2780,7 +3004,7 @@ async function run() {
      * that throws inside update() kills the render loop and the game with it,
      * so this is the check that matters most.
      */
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const g = new Game({});
       g.start(t);
 
@@ -2854,7 +3078,7 @@ async function run() {
     /* Draw every mode, in the states the game actually puts it in. A throw
        here kills the render loop and the game with it, so it is worth
        exercising all of them rather than trusting one. */
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const table = buildTable(t);
       table.world.addBall(newBall());
       r.setTable(table);

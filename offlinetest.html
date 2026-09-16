@@ -133,6 +133,9 @@ async function run() {
     '/Elemental%20Awakening%20Creatures.csv',
     '/Elemental%20Awakening%20Creatures%20Stats%20and%20Moves.csv',
     '/Galactic%20Adventures.csv',
+    '/Raid%20Exclusive%20-%20Search%20and%20Go.csv',
+    '/Exclusives2.csv',
+    '/Exclusives3.csv',
     '/icons/icon-192.png', '/icons/icon-512.png'
   ];
 
@@ -154,8 +157,10 @@ async function run() {
   const missingSprites = wanted.assets.filter(a => !paths.has('/' + a));
   check('and none of the listed ones are missing', missingSprites.length === 0,
         missingSprites.slice(0, 5).join(', '));
-  check('both sets are cached',
-        sprites.some(p => p.includes('Meditot')) && sprites.some(p => p.includes('Psybella')));
+  check('all three sets are cached',
+        sprites.some(p => p.includes('Meditot')) &&
+        sprites.some(p => p.includes('Psybella')) &&
+        sprites.some(p => p.includes('Necrosmion')));
 
   /* =====================================================
      Go offline for real
@@ -220,7 +225,12 @@ async function run() {
   if (bootedIn !== null) {
     /* ---- the data actually parsed, i.e. the CSVs came from cache ---- */
     const cells = doc.querySelectorAll('#mode-body .mode-card');
-    check('the mode picker built from cached data', cells.length === 5, String(cells.length));
+    check('the mode picker built from cached data', cells.length === 6, String(cells.length));
+    /* Six cards means every set's CSV parsed from cache, the Exclusives ones
+       included — a missing set would silently drop its table. */
+    check('including the table that comes from the extra CSVs',
+          [...cells].some(c => /Raid Vault/.test(c.textContent || '')),
+          [...cells].map(c => c.querySelector('b')?.textContent).join(', '));
 
     /* ---- and the table draws ---- */
     const canvas = doc.getElementById('table');

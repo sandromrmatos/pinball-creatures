@@ -1,0 +1,26 @@
+id_output,Name,Stage,Type,image,Rarity,Evolves to,Evolution candy,HP,Attack,Defence,Speed,Total,Move1 Name,Move1 Power,Move1 Level,Move1 Effect,Move1 Effect number,Move2 Name,Move2 Power,Move2 Level,Move2 Effect,Move2 Effect number,Move3 Name,Move3 Power,Move3 Level,Move3 Effect,Move3 Effect number,Move4 Name,Move4 Power,Move4 Level,Move4 Effect,Move4 Effect number
+Exclusive_20.png,Emotoad,Stage 1,Mystic,Emotoad.png,3,Spiranoir,35,70,45,63,40,218,Mire Pulse,32,1,,,Boggy Bounce,55,4,,,,,,,,,,,,
+Exclusive_21.png,Spiranoir,Stage 2,Mystic,Spiranoir.png,,,,88,78,84,57,307,Mire Pulse,32,1,,,Boggy Bounce,55,4,,,Toxin Croak,0,6,Buff self defence,50%,Sludge Serenade,68,8,,
+Exclusive_22.png,Mindloch,Stage 1,Mystic,Mindloch.png,4,,,64,103,56,109,332,Thought Snare,41,1,,,Echoing Dread,57,4,,,Brainwave Bind,0,7,Buff self attack,45%,Nightmare Locket,74,9,,
+Exclusive_23.png,Pipelo,Stage 1,Mystic,Pipelo.png,3,Dreadpipe,30,76,34,87,13,210,Stream Chant,36,1,,,,,,,,,,,,,,,,,
+Exclusive_24.png,Dreadpipe,Stage 2,Mystic,Dreadpipe.png,,Gallowpipe,60,87,55,92,39,273,Stream Chant,36,1,,,Bubble Aria,0,4,Debuff opponent attack,35%,Ripple Waltz,61,7,,,,,,,
+Exclusive_25.png,Gallowpipe,Stage 3,Mystic,Gallowpipe.png,,,,100,75,93,66,334,Stream Chant,36,1,,,Bubble Aria,0,4,Debuff opponent attack,35%,Ripple Waltz,61,7,,,Cascade Chorus,71,8,,
+Exclusive_26.png,Audibolt,Stage 1,Wind,Audibolt.png,3,Tympanarch,45,45,77,67,70,259,Thunder Verse,37,1,,,Static Solo,34,4,Buff self speed,20%,,,,,,,,,,
+Exclusive_27.png,Tympanarch,Stage 2,Wind,Tympanarch.png,,,,48,97,79,79,303,Thunder Verse,37,1,,,Static Solo,34,4,Buff self speed,20%,Amped Anthem,66,6,,,Resonant Shock,73,8,,
+Exclusive_28.png,Whifflen,Stage 1,Wind,Whifflen.png,4,,,70,88,70,88,316,Breeze Nuzzle,25,1,Buff self attack,15%,Pollen Puff,45,4,,,Drift Dance,64,7,,,Whisper Gale,92,8,Debuff self attack,30%
+Exclusive_29.png,Chiquiloma,Stage 1,Wind,Chiquiloma.png,3,Regaloma,30,68,58,55,55,236,Plaza Peck,40,1,,,Bell Chime Chirp,54,4,,,,,,,,,,,,
+Exclusive_30.png,Regaloma,Stage 2,Wind,Regaloma.png,,Imperialoma,60,77,60,78,66,281,Plaza Peck,40,1,,,Bell Chime Chirp,54,4,,,Tiny Trot,0,7,Debuff opponent speed,40%,,,,,
+Exclusive_31.png,Imperialoma,Stage 3,Wind,Imperialoma.png,,,,88,65,90,79,322,Plaza Peck,40,1,,,Bell Chime Chirp,54,4,,,Tiny Trot,0,7,Debuff opponent speed,40%,Rooftop Ruffle,71,8,,
+Exclusive_32.png,Chippa,Stage 1,Neutral,Chippa.png,3,Saltstormi,45,20,25,20,50,115,Chip Shot,25,1,Buff self defence,25%,,,,,,,,,,,,,,,
+Exclusive_33.png,Saltstormi,Stage 2,Neutral,Saltstormi.png,,,,69,56,65,55,245,Chip Shot,25,1,Buff self defence,25%,Cobble Kick,30,4,Buff self attack,25%,Plucky Peck,35,5,Buff self speed,25%,Street Skitter,59,7,,
+Exclusive_34.png,Tajmosmol,Stage 1,Neutral,Tajmosmol.png,4,Tajmoanger,35,60,60,60,60,240,Spice Swirl,25,1,Debuff opponent defence,20%,Curry Burst,30,4,Debuff opponent attack,20%,Bazaar Blaze,35,6,Debuff opponent speed,20%,,,,,
+Exclusive_35.png,Tajmoanger,Stage 2,Neutral,Tajmoanger.png,,,,85,85,85,60,315,Spice Swirl,25,1,Debuff opponent defence,20%,Curry Burst,30,4,Debuff opponent attack,20%,Bazaar Blaze,35,6,Debuff opponent speed,20%,Saffron Spin,65,8,,
+Exclusive_36.png,Omnifine,Stage 1,Neutral,Omnifine.png,5,,,90,99,60,110,359,Prism Surge,39,1,,,Spectrum Guard,61,4,,,Halo Cascade,30,6,Buff self attack,25%,Total Radiance,77,9,,
+Exclusive_37.png,Saplick,Stage 1,Celestial,Saplick.png,3,Tongroove,45,60,56,45,66,227,Sap Sip,38,1,,,Honey Lash,56,4,,,Bark Bash,20,6,Heal self,40,,,,,
+Exclusive_38.png,Tongroove,Stage 2,Celestial,Tongroove.png,,,,70,80,67,77,294,Sap Sip,38,1,,,Honey Lash,56,4,,,Bark Bash,20,6,Heal self,40,Forest Drizzle,71,8,,
+Exclusive_39.png,Pagodillo,Stage 1,Celestial,Pagodillo.png,4,,,55,80,80,120,335,Pagoda Peck,41,1,,,Lantern Glide,52,4,,,Temple Tap,0,6,Heal self,60,Roofline Rush,66,9,,
+Exclusive_40.png,Florabouche,Stage 1,Celestial,Florabouche.png,4,,,69,105,80,70,324,Petal Murmur,35,1,Heal self,10,Bloom Burst,45,4,Heal self,20,Perfume Veil,55,6,Heal self,30,Rosette Rondo,65,8,Heal self,40
+Exclusive_41.png,Glintalon,Stage 1,Mechanic,Glintalon.png,4,,,77,77,77,90,321,Chrome Slash,20,1,Buff self defence,10%,Gilded Wing,35,4,,,Cathedral Cut,49,,,,Spire Dive,59,8,Buff self defence,35%
+Exclusive_42.png,Aegithor,Stage 1,Mechanic,Aegithor.png,5,,,90,100,130,30,350,Shieldwing Bash,43,1,,,Aegis Roar,61,4,,,Bulwark Lunge,0,6,Debuff opponent defence,40%,Citadel Crush,78,8,,
+Exclusive_43.png,Sprockub,Stage 1,Mechanic,Sprockub.png,3,Tinkursuh,45,70,67,67,50,254,Gear Peck,41,1,,,Cog Crunch,59,4,,,Steam Flutter,0,,Buff self defence,50%,,,,,
+Exclusive_44.png,Tinkursuh,Stage 2,Mechanic,Tinkursuh.png,,,,93,80,89,68,330,Gear Peck,41,1,,,Cog Crunch,59,4,,,Steam Flutter,0,,Buff self defence,50%,Engine Rattle,71,9,,

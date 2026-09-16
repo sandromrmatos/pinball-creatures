@@ -19,7 +19,8 @@ import {
   CAPTURE_BALL_SAVE_SECONDS, SHINY_DOUBLE_AT,
   EXTRA_BALL_AT, MAX_MULTIPLIER, SHINY_ODDS, SCORE,
   speciesById, lineagePath, evolutionTargets, bossOf, bossOfSet, speciesOfType,
-  SETS, SET_KEYS, BASE_SET, GALACTIC_UNLOCKS
+  SETS, SET_KEYS, BASE_SET, GALACTIC_UNLOCKS,
+  MODE_KEYS, modeSet, modeType, allBossesForMode, VAULT_UNLOCK_REGISTERED
 } from './data.js';
 
 import { SPINS_PER_SHIFT } from './game.js';
@@ -109,16 +110,36 @@ export function renderCollection() {
   const type = TYPES.includes(store.s.ui.collectionType) ? store.s.ui.collectionType : 'Neutral';
   const setKey = SET_KEYS.includes(store.s.ui.collectionSet) ? store.s.ui.collectionSet : BASE_SET;
   const shinyMode = !!store.s.ui.collectionShiny;
-  const mode = MODES[type];
   const set = SETS[setKey];
 
   const list = speciesOfType(type, setKey);
   const total = list.length;
   const have = shinyMode ? store.shinyCount(type, setKey) : store.registeredCount(type, setKey);
 
-  /* Which Galactic rarities are reachable. The base set has no gates. */
+  /**
+   * What cannot appear yet, and why.
+   *
+   * Two different gates, so two rules. Galactic is gated a rarity tier at a time,
+   * so it is asked per creature. Exclusives is gated as a whole table, so every
+   * creature in it is sealed or open together.
+   */
   const openRarities = new Set(store.galacticRarities());
-  const sealedFor = sp => sp.setKey !== BASE_SET && !openRarities.has(sp.effectiveRarity);
+  const owningMode = MODE_KEYS.find(k => modeSet(k) === setKey) || null;
+
+  /**
+   * Which table's name heads the page.
+   *
+   * A set owned by a table is found *there*, not in the type table that happens
+   * to share the creature's type — labelling Mystic exclusives "Rune Sanctum"
+   * would send the player to a table they can never find them in.
+   */
+  const headMode = MODES[owningMode || type];
+  const sealedFor = sp => {
+    if (sp.setKey === BASE_SET) return false;
+    if (sp.setKey === 'ga') return !openRarities.has(sp.effectiveRarity);
+    const owner = MODE_KEYS.find(k => modeSet(k) === sp.setKey);
+    return owner ? !store.modeUnlocked(owner) : false;
+  };
 
   /* ---- set tabs ---- */
   const setTabs = el('div', { class: 'set-tabs' },
@@ -158,7 +179,28 @@ export function renderCollection() {
    * Spelled out rather than left as a locked grid to work out, because the whole
    * point of the ladder is that it tells you what to go and do next.
    */
-  const gateNote = setKey === BASE_SET ? null : (() => {
+  const gateNote = setKey === BASE_SET ? null : owningMode ? (() => {
+    /* A whole-table gate, so one threshold rather than a ladder. */
+    const v = store.vaultProgress();
+    return el('div', { class: 'gate-note' },
+      el('p', { class: 'small' },
+        el('b', { text: `${v.registered} / ${v.required}` }),
+        el('span', {
+          class: 'muted',
+          text: v.unlocked
+            ? ` registered across the first two sets \u2014 the ${MODES[owningMode].name} is open.`
+            : ` registered across the first two sets \u2014 ${v.needed} more opens the ` +
+              `${MODES[owningMode].name}, where every one of these is found.`
+        })
+      ),
+      el('p', { class: 'muted small', text:
+        'These are raid exclusives, so nothing here is common in the game they came ' +
+        'from. Their rarities are rescaled onto the usual Common to Epic range for ' +
+        'this table.' }),
+      el('p', { class: 'muted small', text:
+        `All five legendaries are available as soon as the table is, one in five each.` })
+    );
+  })() : (() => {
     const p = store.galacticProgress();
     const rows = GALACTIC_UNLOCKS.map(g => el('li', {
       class: p.unlocked.includes(g.rarity) ? 'open' : 'shut'
@@ -193,8 +235,8 @@ export function renderCollection() {
   /* ---- header ---- */
   const head = el('div', { class: 'collection-head' },
     el('div', { class: 'ch-title' },
-      el('h3', { text: mode.name, style: { color: mode.colour } }),
-      el('p', { class: 'muted small', text: `${set.name} \u00b7 ${mode.blurb}` })
+      el('h3', { text: headMode.name, style: { color: headMode.colour } }),
+      el('p', { class: 'muted small', text: `${set.name} \u00b7 ${headMode.blurb}` })
     ),
     el('div', { class: 'ch-right' },
       el('span', { class: 'count', text: `${have} / ${total}${shinyMode ? ' shiny' : ''}` }),
@@ -211,12 +253,14 @@ export function renderCollection() {
   /* ---- progress ---- */
   const pct = total ? Math.round((have / total) * 100) : 0;
   const bar = el('div', { class: 'prog' },
-    el('i', { style: { width: `${pct}%`, background: mode.colour } })
+    el('i', { style: { width: `${pct}%`, background: headMode.colour } })
   );
 
   /* ---- the boss, called out ---- */
   const boss = bossOfSet(setKey, type);
-  const bossLocked = setKey !== BASE_SET && !store.galacticBossUnlocked(type);
+  const bossLocked = owningMode
+    ? !store.modeUnlocked(owningMode)
+    : (setKey !== BASE_SET && !store.galacticBossUnlocked(type));
   const bossKnown = boss ? store.isRegistered(boss.id) : false;
 
   const bossRow = boss ? el('div', { class: 'boss-row' },
@@ -269,6 +313,18 @@ export function openSpecies(sp) {
  */
 function sealNote(sp) {
   if (!sp || sp.setKey === BASE_SET || store.isRegistered(sp.id)) return null;
+
+  /* A set owned by a table is gated as one thing: the table. Nothing in it is
+     reachable until that opens, legendaries included. */
+  const owner = MODE_KEYS.find(k => modeSet(k) === sp.setKey);
+  if (owner) {
+    if (store.modeUnlocked(owner)) return null;
+    const v = store.vaultProgress();
+    return el('p', { class: 'sp-seal small' },
+      `\u{1f512} Found only in the ${MODES[owner].name}, which opens at ` +
+      `${v.required} creatures registered across Elemental Awakening and ` +
+      `Galactic Adventures. You have ${v.registered}.`);
+  }
 
   if (sp.effectiveRarity === 5) {
     const base = bossOf(sp.type);
@@ -405,14 +461,14 @@ export function renderScores() {
     el('span', { class: 'muted small', text: best.type ? `${MODES[best.type].name} \u00b7 ${fmtDate(best.at)}` : 'No games yet' })
   );
 
-  const tables = TYPES.map(type => {
-    const rows = store.highScores(type);
-    const mode = MODES[type];
+  const tables = MODE_KEYS.map(key => {
+    const rows = store.highScores(key);
+    const mode = MODES[key];
 
     return el('div', { class: 'card score-card' },
       el('h4', { style: { color: mode.colour } },
         mode.name,
-        el('small', { class: 'muted', text: ` \u00b7 ${type}` })
+        el('small', { class: 'muted', text: ` \u00b7 ${modeType(key) || SETS[modeSet(key)].short}` })
       ),
       rows.length
         ? el('ol', { class: 'score-list' },
@@ -485,29 +541,38 @@ export function renderProfile() {
    * Both rows, because the second is the reward for finishing the first: seeing
    * the sealed Galactic row is how you learn there is one.
    */
-  const bossRows = SET_KEYS.map(key => el('div', { class: 'boss-set' },
-    el('span', { class: 'muted small', text: SETS[key].name }),
-    el('div', { class: 'boss-grid' },
-      TYPES.map(t => {
-        const b = bossOfSet(key, t);
-        const known = b ? store.isRegistered(b.id) : false;
-        const sealed = key !== BASE_SET && !store.galacticBossUnlocked(t);
-        const cls = `boss-cell${known ? ' got' : ''}${sealed && !known ? ' sealed' : ''}`;
-        return el('div', { class: cls },
-          b ? el('img', { src: b.imagePath, alt: '', loading: 'lazy' }) : null,
-          el('small', { text: b ? (known ? b.name : '???') : '\u2014' }),
-          el('span', { class: 'muted small', text: known ? '\u2713' : t })
-        );
-      })
-    )
-  ));
+  const bossRows = SET_KEYS.map(key => {
+    /* Exclusives are the Raid Vault's five, so the whole row is sealed or open
+       together rather than per type. */
+    const vaultSet = modeSet('Exclusives') === key;
+    const rowSealed = vaultSet && !store.modeUnlocked('Exclusives');
+
+    return el('div', { class: 'boss-set' },
+      el('span', { class: 'muted small', text: SETS[key].name }),
+      el('div', { class: 'boss-grid' },
+        TYPES.map(t => {
+          const b = bossOfSet(key, t);
+          const known = b ? store.isRegistered(b.id) : false;
+          const sealed = vaultSet ? rowSealed
+                                  : (key !== BASE_SET && !store.galacticBossUnlocked(t));
+          const cls = `boss-cell${known ? ' got' : ''}${sealed && !known ? ' sealed' : ''}`;
+          return el('div', { class: cls },
+            b ? el('img', { src: b.imagePath, alt: '', loading: 'lazy' }) : null,
+            el('small', { text: b ? (known ? b.name : '???') : '\u2014' }),
+            el('span', { class: 'muted small', text: known ? '\u2713' : t })
+          );
+        })
+      )
+    );
+  });
 
   const bosses = el('div', { class: 'card' },
     el('h4', { text: 'Awakening Gate' }),
     bossRows,
     el('p', { class: 'muted small', text:
       'Beat a type\u2019s Awakening legendary and its Galactic one joins that ' +
-      'gate, at even odds with the first.' })
+      'gate, at even odds with the first. The Raid Vault fields all five of its ' +
+      'own at once, one in five each.' })
   );
 
   fill(body, ring, stats, bosses, renderSettingsCard(), renderSaveCard());
@@ -665,32 +730,52 @@ export function renderModePicker(onPick) {
   const body = $('#mode-body');
   if (!body) return;
 
-  const cards = TYPES.map(type => {
-    const mode = MODES[type];
-    const boss = bossOf(type);
-    const have = store.registeredCount(type);
-    const total = store.speciesTotal(type);
-    const best = store.bestFor(type);
+  const cards = MODE_KEYS.map(key => {
+    const mode = MODES[key];
+    const set = modeSet(key);
+    const type = modeType(key);
+    const unlocked = store.modeUnlocked(key);
+
+    /* A set-based table counts its whole set; a type table counts its type. */
+    const have = set ? store.registeredCount(null, set) : store.registeredCount(type);
+    const total = set ? store.speciesTotal(null, set) : store.speciesTotal(type);
+    const best = store.bestFor(key);
+
+    /* Every legendary the table can field, so the Vault shows all five. */
+    const bosses = allBossesForMode(key);
+
+    const vault = store.vaultProgress();
 
     return el('button', {
-      class: 'mode-card',
+      class: `mode-card${unlocked ? '' : ' sealed'}`,
       type: 'button',
       style: { '--mode': mode.colour },
-      onclick: () => onPick(type)
+      disabled: !unlocked,
+      onclick: () => { if (unlocked) onPick(key); }
     },
       el('div', { class: 'mc-top' },
         el('b', { text: mode.name }),
-        el('span', { class: `tag t-${type}`, text: type })
+        el('span', {
+          class: `tag${type ? ' t-' + type : ' t-any'}`,
+          text: type || SETS[set]?.short || 'All types'
+        })
       ),
       el('p', { class: 'muted small', text: mode.blurb }),
-      el('div', { class: 'mc-foot' },
-        el('span', { class: 'muted small', text: `${have}/${total} registered` }),
-        best ? el('span', { class: 'muted small', text: `best ${fmtShort(best)}` }) : null,
-        boss ? el('span', {
-          class: `mc-boss${store.isRegistered(boss.id) ? ' got' : ''}`,
-          title: boss.name
-        }, el('img', { src: boss.imagePath, alt: '', loading: 'lazy' })) : null
-      )
+      unlocked
+        ? el('div', { class: 'mc-foot' },
+            el('span', { class: 'muted small', text: `${have}/${total} registered` }),
+            best ? el('span', { class: 'muted small', text: `best ${fmtShort(best)}` }) : null,
+            el('span', { class: 'mc-bosses' },
+              bosses.map(b => el('span', {
+                class: `mc-boss${store.isRegistered(b.id) ? ' got' : ''}`,
+                title: b.name
+              }, el('img', { src: b.imagePath, alt: '', loading: 'lazy' })))
+            )
+          )
+        : el('p', { class: 'mc-locked small' },
+            `\u{1f512} Register ${vault.needed} more creature${vault.needed === 1 ? '' : 's'} ` +
+            `from Elemental Awakening or Galactic Adventures to open this table ` +
+            `(${vault.registered} of ${vault.required}).`)
     );
   });
 
@@ -708,13 +793,18 @@ export function renderShiftOffer(payload, { onChoose, onDecline }) {
   fill(body,
     el('p', { class: 'hint', text: 'Move to another table. Your score, your disc and everything you have caught come with you.' }),
     el('div', { class: 'shift-grid' },
-      payload.types.map(t => el('button', {
-        class: 'shift-card', type: 'button', style: { '--mode': MODES[t].colour },
-        onclick: () => { closeSheet('sheet-shift'); onChoose(t); }
-      },
-        el('b', { text: MODES[t].name }),
-        el('small', { class: 'muted', text: `${store.registeredCount(t)}/${store.speciesTotal(t)}` })
-      ))
+      payload.types.map(t => {
+        const set = modeSet(t);
+        const have = set ? store.registeredCount(null, set) : store.registeredCount(t);
+        const total = set ? store.speciesTotal(null, set) : store.speciesTotal(t);
+        return el('button', {
+          class: 'shift-card', type: 'button', style: { '--mode': MODES[t].colour },
+          onclick: () => { closeSheet('sheet-shift'); onChoose(t); }
+        },
+          el('b', { text: MODES[t].name }),
+          el('small', { class: 'muted', text: `${have}/${total}` })
+        );
+      })
     ),
     el('div', { class: 'btn-row' },
       el('button', {
@@ -1029,8 +1119,8 @@ export function renderGuide() {
     ),
 
     /* ============ SETS ============ */
-    section('Two sets of creatures',
-      para(`There are ${DB.species.length} creatures in the game, in two sets. Elemental Awakening (${store.speciesTotal(null, 'ea')}) is available from the start. Galactic Adventures (${store.speciesTotal(null, 'ga')}) is earned with it, one rarity at a time.`),
+    section('Three sets of creatures',
+      para(`There are ${DB.species.length} creatures in the game, in three sets. Elemental Awakening (${store.speciesTotal(null, 'ea')}) is available from the start. Galactic Adventures (${store.speciesTotal(null, 'ga')}) is earned with it, one rarity at a time. Exclusives (${store.speciesTotal(null, 'ex')}) is a whole extra table, earned with both.`),
       table(['Unlocks', 'Awakening creatures registered'],
         GALACTIC_UNLOCKS.map(g => [`${RARITY_NAMES[g.rarity]} Galactic creatures`, String(g.registered)])),
       defs([
@@ -1038,16 +1128,20 @@ export function renderGuide() {
         ['What unlocking does', 'Those creatures join the same rarity pool as their Awakening counterparts. It does not make rare creatures more common; it makes them more varied.'],
         ['Legendaries', 'Separate from the ladder. Beat a type\u2019s Awakening legendary and that type\u2019s Galactic legendary joins its gate. From then on the gate picks between the two at even odds, so the first one is still worth fighting.'],
         ['Already on your device', 'Every picture for both sets is stored the first time you open the game, so an unlock works straight away even with no connection.'],
-        ['Where to look', 'The Collection has a tab per set. A creature you have not unlocked yet shows with a padlock, which is different from one you simply have not found.']
+        ['Where to look', 'The Collection has a tab per set. A creature you have not unlocked yet shows with a padlock, which is different from one you simply have not found.'],
+        ['Exclusives', `A sixth table rather than a rarity ladder. Register ${VAULT_UNLOCK_REGISTERED} creatures across Elemental Awakening and Galactic Adventures together and the Raid Vault opens; every Exclusive is found there and nowhere else. Registering Exclusives does not count towards its own threshold.`],
+        ['Rescaled rarities', 'Exclusives were raid rewards in the game they came from, so the files only use Rare to Legendary. Left alone the whole set would sit in the two rarest slots and almost never appear, so it is rescaled onto the normal Common to Epic spread \u2014 in the same proportions as the rest of the game. The order is kept: nothing that was rarer at source comes out commoner here.'],
+        ['Five legendaries', 'The Raid Vault has its own five, one per type, and unlike the other tables they are all available the moment it opens \u2014 one in five each time you shoot the gate. The table itself was the thing you had to earn.']
       ])
     ),
 
-    /* ============ THE FIVE TABLES ============ */
-    section('The five tables',
+    /* ============ THE TABLES ============ */
+    section('The six tables',
       para('Every table shares the same flippers, drain, lanes, bumpers, ramps and Well, so they all handle the same way. Only the centre changes \u2014 and which creatures you can find.'),
       table(['Table', 'Type', 'Awakening 1/2/3/4', 'Galactic 1/2/3/4', 'Gate legendaries'], modeRows),
       defs([
         ['Wildwood Green', 'The gentle one. Three herd lanes to sweep, two stumps flanking a wide open shot up the middle to the Well. Six of its ten catchables are Common, which makes it the place to start.'],
+        ['Raid Vault', `Locked until you have registered ${VAULT_UNLOCK_REGISTERED} creatures across the first two sets. Two rings turn around a core, each with one gap, in opposite directions at different speeds. Both gaps line up only now and then, and the rings glow when they do \u2014 that is the moment to shoot the middle. The core is worth as much as clearing the whole target bank.`],
         ['Rune Sanctum', 'A horseshoe ring around a spinning rune disc. Feed the ball in from below and the disc bats it around; the more you work the spinner, the faster the disc turns.'],
         ['Gale Spire', 'An updraught in the middle that lifts the ball against gravity, gusting on and off every few seconds. Fast, loose and hard to predict.'],
         ['Starbloom Grove', 'Four vines standing across the approach to the Well. Hitting one cuts it, but they grow back after a few seconds, so it is a race: clear a path faster than it closes.'],

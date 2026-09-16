@@ -26,7 +26,7 @@
    one.
    ============================================================ */
 
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const CACHE_NAME = `pinball-creatures-${CACHE_VERSION}`;
 
 /**
@@ -45,6 +45,9 @@ const CORE = [
   'Elemental Awakening Creatures.csv',
   'Elemental Awakening Creatures Stats and Moves.csv',
   'Galactic Adventures.csv',
+  'Raid Exclusive - Search and Go.csv',
+  'Exclusives2.csv',
+  'Exclusives3.csv',
   'js/main.js',
   'js/data.js',
   'js/state.js',

@@ -590,7 +590,14 @@ export class Renderer {
 
       if (c.kind === 'circle' && !c.sensor) { this._bumper(ctx, c, lit); continue; }
       if (c.kind === 'circle') { this._ring(ctx, c.c.x, c.c.y, c.r, lit ? '#ffffff' : this._alpha(this.mode.colour, 0.5), 0.7); continue; }
-      if (c.kind === 'arc') { this._structural(ctx, c, lit); continue; }
+      /**
+       * A Raid Vault ring lights up while both mouths overlap.
+       *
+       * The alignment is the entire shot and is otherwise invisible: two arcs
+       * turning at different speeds look the same whether or not there is a way
+       * through. Reusing the `lit` flag means no new drawing code.
+       */
+      if (c.kind === 'arc') { this._structural(ctx, c, lit || (kind === 'vaultRing' && g.aligned)); continue; }
       this._structural(ctx, c, lit);
     }
 

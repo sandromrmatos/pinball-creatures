@@ -1,0 +1,6 @@
+id_output,Name,Stage,Type,image,Rarity,Evolves to,Evolution candy,HP,Attack,Defence,Speed,Move1 Name,Move1 Power,Move1 Level,Move1 Effect,Move1 Effect number,Move2 Name,Move2 Power,Move2 Level,Move2 Effect,Move2 Effect number,Move3 Name,Move3 Power,Move3 Level,Move3 Effect,Move3 Effect number,Move4 Name,Move4 Power,Move4 Level,Move4 Effect,Move4 Effect number
+Exclusive_battlefrontier_01,Necrosmion,Stage 1,Mystic,Necrosmion.png,5,,,110,105,60,95,Void Siphon,35,1,,,Abyssal Eclipse,50,4,,,Phantasm Lash,0,7,"Buff self attack, defence",35%,Necro Curse,75,9,,
+Exclusive_battlefrontier_02,Origamiros,Stage 1,Wind,Origamiros.png,5,,,110,110,45,105,Papercut Cascade,35,1,,,Crease Shield,58,3,,,Thousand-Crane Surge,0,7,"Buff self attack, speed",35%,Geometric Slash,79,8,,
+Exclusive_battlefrontier_03,Aprorok,Stage 1,Neutral,Aprorok.png,5,,,110,100,80,80,Crag Crush,35,1,,,Duststorm Veil,53,4,,,Tectonic Pulse,0,7,"Buff self defence, speed",35%,Obsidian Rampart,77,9,,
+Exclusive_battlefrontier_04,Yerba,Stage 1,Celestial,Yerba.png,5,,,110,95,80,85,Bitter Leaf,35,1,,,Soothe Brew,50,5,,,Maté Sprout,0,7,Heal self,80,Toxic Infusion,76,9,,
+Exclusive_battlefrontier_05,Terravoltz,Stage 1,Mechanic,Terravoltz.png,5,,,110,90,105,65,Ground Voltage,35,1,,,Overcharge Slam,45,5,,,Magnetic Core,0,7,"Debuff opponent attack, defence",25%,Terra Discharge,73,10,,

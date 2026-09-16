@@ -11,7 +11,7 @@
    rather than papered over with empty states.
    ============================================================ */
 
-import { loadDatabase, DB, TYPES, MODES, DISC_TIERS, allSpritePaths } from './data.js';
+import { loadDatabase, DB, MODES, DISC_TIERS, allSpritePaths } from './data.js';
 import { store } from './state.js';
 import { Persist } from './persist.js';
 import { Renderer, preloadSprites } from './render.js';
@@ -96,7 +96,8 @@ async function main() {
   requestAnimationFrame(frame);
 
   // An idle table behind the menu, so the game is never a blank rectangle.
-  game.previewTable(store.s.ui.lastMode || 'Neutral');
+  // A saved lastMode can outlive its unlock if a save is edited or imported.
+  game.previewTable(store.modeUnlocked(store.s.ui.lastMode) ? store.s.ui.lastMode : 'Neutral');
   syncTable();
   renderer.resize();
   openSheet('sheet-mode');
@@ -364,7 +365,10 @@ function syncTable() {
 function startGame(type) {
   closeAllSheets();
   audio.unlock();
-  game.start(TYPES.includes(type) ? type : 'Neutral');
+  /* Validated against what is unlocked, not merely against what exists: this is
+     the one path a table is actually started from, so a sealed one must not get
+     through it however it was asked for. */
+  game.start(store.modeUnlocked(type) ? type : 'Neutral');
   syncTable();
   showScreen('table');
   updateHud();

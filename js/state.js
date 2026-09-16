@@ -16,8 +16,9 @@
 
 import { Persist, progressOf } from './persist.js';
 import {
-  DB, TYPES, speciesById, effectiveRarityOf,
-  BASE_SET, SET_KEYS, bossOf, galacticRaritiesUnlocked, nextGalacticUnlock
+  DB, TYPES, MODE_KEYS, MODES, speciesById, effectiveRarityOf,
+  BASE_SET, SET_KEYS, bossOf, galacticRaritiesUnlocked, nextGalacticUnlock,
+  VAULT_UNLOCK_SETS, VAULT_UNLOCK_REGISTERED, VAULT_MODE, vaultUnlocked
 } from './data.js';
 
 export const SAVE_VERSION = 1;
@@ -33,9 +34,10 @@ const SAVE_DEBOUNCE_MS = 1_200;
    --------------------------------------------------------------- */
 
 /** One high score table per mode, keyed by type. */
+/** One table per playable mode, which is no longer the same as per type. */
 function blankScores() {
   const o = {};
-  for (const t of TYPES) o[t] = [];
+  for (const k of MODE_KEYS) o[k] = [];
   return o;
 }
 
@@ -122,7 +124,7 @@ function migrate(raw) {
   copyMap(raw.bossDefeated, s.bossDefeated, v => { const n = Math.round(Number(v)); return Number.isFinite(n) && n > 0 ? n : null; });
 
   if (raw.highScores && typeof raw.highScores === 'object') {
-    for (const t of TYPES) {
+    for (const t of MODE_KEYS) {
       const list = Array.isArray(raw.highScores[t]) ? raw.highScores[t] : [];
       s.highScores[t] = list
         .map(e => ({
@@ -141,7 +143,7 @@ function migrate(raw) {
 
   if (raw.best && typeof raw.best === 'object') {
     s.best.score = Math.max(0, Math.round(Number(raw.best.score) || 0));
-    s.best.type = TYPES.includes(raw.best.type) ? raw.best.type : null;
+    s.best.type = MODE_KEYS.includes(raw.best.type) ? raw.best.type : null;
     s.best.at = Number(raw.best.at) || 0;
   }
 
@@ -162,7 +164,7 @@ function migrate(raw) {
   }
 
   if (raw.ui && typeof raw.ui === 'object') {
-    if (TYPES.includes(raw.ui.lastMode)) s.ui.lastMode = raw.ui.lastMode;
+    if (MODE_KEYS.includes(raw.ui.lastMode)) s.ui.lastMode = raw.ui.lastMode;
     if (TYPES.includes(raw.ui.collectionType)) s.ui.collectionType = raw.ui.collectionType;
     if (SET_KEYS.includes(raw.ui.collectionSet)) s.ui.collectionSet = raw.ui.collectionSet;
     s.ui.collectionShiny = !!raw.ui.collectionShiny;
@@ -331,7 +333,7 @@ export const store = {
   },
 
   recordBossWin(type) {
-    if (!TYPES.includes(type)) return;
+    if (!MODE_KEYS.includes(type)) return;
     this.s.bossDefeated[type] = (this.s.bossDefeated[type] || 0) + 1;
     this.touch({ immediate: true });
   },
@@ -405,6 +407,50 @@ export const store = {
     return !!base && this.isRegistered(base.id);
   },
 
+  /* ---------- unlocking the Raid Vault ---------- */
+
+  /**
+   * Registrations across the sets that open the Vault.
+   *
+   * Exclusives themselves are excluded, so the table cannot help unlock itself —
+   * the same reasoning that keeps Galactic registrations out of the Galactic
+   * ladder.
+   */
+  vaultRegistered() {
+    return VAULT_UNLOCK_SETS.reduce((n, key) => n + this.registeredCount(null, key), 0);
+  },
+
+  /** How far along the Vault threshold is, for the picker and the Collection. */
+  vaultProgress() {
+    const have = this.vaultRegistered();
+    const total = VAULT_UNLOCK_SETS.reduce((n, key) => n + this.speciesTotal(null, key), 0);
+    return {
+      registered: have,
+      total,
+      needed: Math.max(0, VAULT_UNLOCK_REGISTERED - have),
+      required: VAULT_UNLOCK_REGISTERED,
+      unlocked: vaultUnlocked(have)
+    };
+  },
+
+  /**
+   * True if this table can be played.
+   *
+   * Asked of every mode rather than only of the Vault, so the picker, the shift
+   * offer and the boot-time restore all go through one rule. The five type tables
+   * have always been open from the start and still are.
+   */
+  modeUnlocked(modeKey) {
+    if (!MODE_KEYS.includes(modeKey)) return false;
+    if (modeKey === VAULT_MODE) return vaultUnlocked(this.vaultRegistered());
+    return true;
+  },
+
+  /** Every table the player can currently choose. */
+  unlockedModes() {
+    return MODE_KEYS.filter(k => this.modeUnlocked(k));
+  },
+
   /** 0..1 across the whole set, for the profile ring. */
   completion() {
     const total = DB.species.length || 1;
@@ -434,7 +480,7 @@ export const store = {
     s.stats.bestDiscTier = Math.max(s.stats.bestDiscTier, discTier);
 
     let rank = null;
-    if (TYPES.includes(type) && clean > 0) {
+    if (MODE_KEYS.includes(type) && clean > 0) {
       const list = s.highScores[type];
       const entry = { score: clean, at: Date.now(), caught, evolved, bossWins, discTier };
       list.push(entry);

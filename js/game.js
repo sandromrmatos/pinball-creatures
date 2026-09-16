@@ -25,7 +25,7 @@ import {
   CAPTURE_METER, CAPTURE_SECONDS, CAPTURE_DRIFT,
   EVOLUTION_SHARDS, EVOLUTION_SECONDS,
   BOSS_SECONDS, BOSS_SHIELD_SECONDS,
-  SHINY_ODDS, SHINY_DOUBLE_AT, GALACTIC_BOSS_ODDS,
+  SHINY_ODDS, SHINY_DOUBLE_AT, MODE_KEYS, modeType,
   rollEncounter, bossOf, bossChoicesFor, speciesById, evolutionTargets,
   chance, clamp, pick, randRange
 } from './data.js';
@@ -160,6 +160,8 @@ export class Game {
     this._ballLostUntil = 0;
     /** True while the Well is holding the ball waiting on a shift decision. */
     this._awaitingShift = false;
+    /** Charge count at which the player last said "stay". See declineShift. */
+    this._shiftDeclinedAt = 0;
 
     /* Well ejection state: which way it fired last, when, and how many times
        the ball has come straight back. */
@@ -185,7 +187,7 @@ export class Game {
 
   /** Build a table and start a fresh three-ball game. */
   start(type = 'Neutral') {
-    const chosen = TYPES.includes(type) ? type : 'Neutral';
+    const chosen = MODE_KEYS.includes(type) ? type : 'Neutral';
     this._buildTable(chosen);
 
     this.run = {
@@ -240,7 +242,7 @@ export class Game {
    * it is purely something for the renderer to draw.
    */
   previewTable(type = 'Neutral') {
-    return this._buildTable(TYPES.includes(type) ? type : 'Neutral');
+    return this._buildTable(MODE_KEYS.includes(type) ? type : 'Neutral');
   }
 
   /** Abandon the current game without filing a score. */
@@ -269,7 +271,7 @@ export class Game {
    * whole point: it is a change of area, not a new game.
    */
   shiftType(type) {
-    if (!this.run || !TYPES.includes(type) || type === this.run.type) return false;
+    if (!this.run || !MODE_KEYS.includes(type) || type === this.run.type) return false;
 
     this._buildTable(type);
     this.run.type = type;
@@ -295,6 +297,8 @@ export class Game {
 
     this._ramp = null;
     this._awaitingShift = false;
+    // A new ball is a fresh decision, so a refusal does not outlive the ball.
+    this._shiftDeclinedAt = 0;
     this._saucerLocks = 0;
     this._lastSaucerExit = -Infinity;
     this._penBox = null;
@@ -733,6 +737,20 @@ export class Game {
 
     if (kind === 'updraftEye') this._award(SCORE.gimmick, { mult: false });
 
+    /**
+     * Reaching the Vault core means threading both rings while their mouths were
+     * lined up, which is the hardest single shot in the game — so it pays like the
+     * bank, winds the rings up, and puts a rung on the multiplier.
+     */
+    if (kind === 'vaultCore') {
+      g.open?.();
+      this._award(SCORE.vaultCore, { mult: false });
+      this._bumpMultiplier(0.75);
+      this._sound('vault');
+      this._emit('gimmick', { kind, opens: g.state?.opens ?? 0 });
+      return;
+    }
+
     this._emit('gimmick', { kind });
   }
 
@@ -858,7 +876,7 @@ export class Game {
     if (armed === 'boss') this._startBoss();
     else if (armed === 'evolution') this._startEvolution();
     else if (armed === 'encounter') this._startEncounter();
-    else if (this.run.shiftCharges > 0) this._offerShift();
+    else if (this._shiftOnOffer()) this._offerShift();
     else this._kickOutOfSaucer();
   }
 
@@ -912,26 +930,50 @@ export class Game {
     this._emit('shiftOffer', {
       current: this.run.type,
       charges: this.run.shiftCharges,
-      types: TYPES.filter(t => t !== this.run.type)
+      /* Only tables the player can actually reach. The Raid Vault is offered
+         once it is unlocked, which makes shifting a way into it mid-game. */
+      types: MODE_KEYS.filter(t => t !== this.run.type && store.modeUnlocked(t))
     });
   }
 
   /** Accept the offer. Consumes a charge and rebuilds the table. */
   chooseShift(type) {
     if (!this._awaitingShift || !this.run) return false;
-    if (!TYPES.includes(type) || type === this.run.type) return false;
+    if (!MODE_KEYS.includes(type) || type === this.run.type) return false;
 
     this._awaitingShift = false;
     this.run.shiftCharges--;
+    // Accepting clears the refusal, so a later charge is offered normally.
+    this._shiftDeclinedAt = 0;
     return this.shiftType(type);
   }
 
-  /** Decline, and keep the charge for next time. */
+  /**
+   * Decline. The charge is kept, but the offer stops being made.
+   *
+   * Keeping the charge and nothing else meant the Well asked again on the very
+   * next visit, and the next, for the rest of the ball — the answer was never
+   * recorded anywhere, so every shot up the middle turned into the same dialog.
+   * Saying "stay" has to mean something.
+   *
+   * The declined-at count is what makes it mean something without taking the
+   * charge away: the offer returns once the player has *earned another* one, or
+   * on the next ball. Both are things the player did, rather than a timer, so
+   * the offer never reappears out of nowhere.
+   */
   declineShift() {
     if (!this._awaitingShift) return false;
     this._awaitingShift = false;
+    this._shiftDeclinedAt = this.run ? this.run.shiftCharges : 0;
     this._kickOutOfSaucer();
     return true;
+  }
+
+  /** True while the player has a charge they have not already turned down. */
+  _shiftOnOffer() {
+    return !!this.run &&
+           this.run.shiftCharges > 0 &&
+           this.run.shiftCharges > this._shiftDeclinedAt;
   }
 
   /* ---------------------------------------------------------------
@@ -1244,19 +1286,19 @@ export class Game {
      --------------------------------------------------------------- */
 
   /**
-   * The gate opens on one of the type's legendaries.
+   * The gate opens on one of the table's legendaries, picked uniformly.
    *
-   * Beating a type's Elemental legendary unlocks a Galactic one alongside it, and
-   * from then on the gate picks between them at even odds. Both, rather than a
-   * replacement: the Elemental boss stays worth fighting for its shiny, and a
-   * type you have cleared still has something left in it.
+   * On a type table, beating the Elemental legendary unlocks a Galactic one
+   * alongside it — both, rather than a replacement, so the first stays worth
+   * fighting for its shiny and a type you have cleared still has something left
+   * in it. That makes it 50/50. The Raid Vault fields five at once, which the
+   * same uniform pick makes 20% each.
    */
   _pickBoss() {
     const choices = bossChoicesFor(this.run.type, {
       galacticUnlocked: store.galacticBossUnlocked(this.run.type)
     });
-    if (choices.length < 2) return choices[0] || null;
-    return chance(GALACTIC_BOSS_ODDS) ? choices[1] : choices[0];
+    return choices.length ? pick(choices) : null;
   }
 
   _startBoss() {

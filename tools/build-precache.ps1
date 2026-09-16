@@ -24,7 +24,11 @@
 
 [CmdletBinding()]
 param(
-    [string[]] $Sets = @('Elemental Awakening Creatures.csv', 'Galactic Adventures.csv'),
+    [string[]] $Sets = @('Elemental Awakening Creatures.csv',
+                         'Galactic Adventures.csv',
+                         'Raid Exclusive - Search and Go.csv',
+                         'Exclusives2.csv',
+                         'Exclusives3.csv'),
     [switch]   $Quiet
 )
 
