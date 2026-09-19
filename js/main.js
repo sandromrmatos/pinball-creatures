@@ -11,7 +11,7 @@
    rather than papered over with empty states.
    ============================================================ */
 
-import { loadDatabase, DB, MODES, DISC_TIERS, allSpritePaths } from './data.js';
+import { loadDatabase, DB, MODES, DISC_TIERS, RARITY_NAMES, allSpritePaths } from './data.js';
 import { store } from './state.js';
 import { Persist } from './persist.js';
 import { Renderer, preloadSprites } from './render.js';
@@ -180,12 +180,17 @@ function updateHud() {
   const sub = $('#hud-sub');
   if (h.sub) {
     const s = h.sub;
+    /* Shiny leads the label rather than trailing it. A star tacked on the end was
+       easy to miss on the one creature in a hundred it matters for, and on a long
+       name it could be pushed off the edge entirely. */
+    const shinyTag = s.shiny ? '\u2605 SHINY \u00b7 ' : '';
     const label = s.kind === 'evolution'
       ? `Evolving \u00b7 ${s.shards}/${s.shardsNeeded} shards`
       : s.kind === 'boss'
-        ? `${s.name}${s.shielded ? ' \u00b7 SHIELDED' : ''}`
-        : `${s.name}${s.shiny ? ' \u2605' : ''}`;
+        ? `${shinyTag}${s.name}${s.shielded ? ' \u00b7 SHIELDED' : ''}`
+        : `${shinyTag}${s.name}`;
     $('#hud-sub-label').textContent = label;
+    sub.classList.toggle('shiny', !!s.shiny);
     $('#hud-sub-time').textContent = fmtClock(s.seconds);
     const frac = s.kind === 'evolution'
       ? s.shards / s.shardsNeeded
@@ -268,6 +273,38 @@ function handleGameEvent(type, p) {
       if (p.what === 'boss') toast('Awakening Gate open! Shoot the Well.', { kind: 'good', ms: 3200 });
       else if (p.what === 'evolution') toast('Evolution ready. Shoot the Well.', { kind: 'good' });
       else toast('Encounter ready. Shoot the Well.', { kind: 'good' });
+      break;
+
+    /**
+     * Announced on arrival, not only on capture.
+     *
+     * A shiny is one in a hundred and the reveal only happens if you actually
+     * catch it — so without this, the run where one got away was the run where the
+     * player never knew it was there. The rarity is worth saying too: it is what
+     * decides how many hits the creature will take.
+     */
+    case 'encounterStart': {
+      const rare = RARITY_NAMES[p.rarity] || '';
+      if (p.shiny) {
+        toast(`\u2605 SHINY ${p.species.name}! Do not lose this one.`,
+              { kind: 'good', ms: 5000 });
+        buzz([30, 60, 30, 60, 30]);
+      } else if (p.rarity >= 4) {
+        toast(`${rare} \u2014 ${p.species.name}!`, { kind: 'good', ms: 3600 });
+        buzz([20, 40, 20]);
+      } else {
+        toast(`${rare} ${p.species.name} appeared.`, { ms: 2600 });
+      }
+      break;
+    }
+
+    /* A shiny legendary is the rarest thing in the game, so it gets its own line. */
+    case 'bossStart':
+      toast(p.shiny
+        ? `\u2605 SHINY ${p.species.name}! The rarest shot in the game.`
+        : `${p.species.name} \u2014 break the shield, then hit it.`,
+        { kind: 'good', ms: p.shiny ? 5200 : 4000 });
+      buzz(p.shiny ? [30, 60, 30, 60, 30] : [24, 50, 24]);
       break;
 
     case 'discUpgrade':

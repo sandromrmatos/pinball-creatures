@@ -267,6 +267,9 @@ body { user-select: none; }
   padding: 5px 8px;
 }
 .sub-banner.shielded { border-color: var(--bad); }
+/* A shiny is one creature in a hundred, so the banner says so loudly. */
+.sub-banner.shiny { border-color: var(--r5); box-shadow: 0 0 0 1px rgba(255, 204, 77, .35); }
+.sub-banner.shiny #hud-sub-label { color: var(--r5); }
 .sub-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
 .sub-bar { height: 4px; border-radius: 4px; background: #222c52; margin-top: 4px; overflow: hidden; }
 .sub-bar i { display: block; height: 100%; width: 0; background: var(--good); transition: width .12s linear; }
@@ -356,6 +359,9 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
 }
 .tag.shiny { border-color: var(--r5); color: var(--r5); }
 .tag.legend { border-color: var(--r5); color: var(--r5); }
+.tag.ok { border-color: var(--r2); color: var(--r2); }
+.tag.absent { border-color: #4a568c; color: #8d98c4; border-style: dashed; }
+.tag.muted-tag { color: var(--muted); }
 .tag.best { border-color: var(--r5); color: var(--r5); }
 .tag.r-1 { color: var(--r1); } .tag.r-2 { color: var(--r2); }
 .tag.r-3 { color: var(--r3); } .tag.r-4 { color: var(--r4); }
@@ -517,12 +523,59 @@ body[data-flippers='buttons'] .flip-buttons { display: flex; }
 .cell .rar.r-4 { color: var(--r4); box-shadow: inset 0 0 0 1px var(--r4); }
 .cell .rar.r-5 { color: var(--r5); box-shadow: inset 0 0 0 1px var(--r5); }
 
-/* Not registered: a silhouette, and the name withheld. */
-.cell.locked img { filter: brightness(0) opacity(.4); }
+/* Not registered: a silhouette, a dashed edge and a ? badge. The dash and the
+   badge are what stop it reading as "a dark creature" rather than "not found". */
+.cell.locked { border-style: dashed; border-color: #38436e; }
+.cell.locked img { filter: brightness(0) opacity(.3); }
+.cell.locked .nm { color: var(--muted); font-style: italic; }
+.unseen {
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  border: 1px solid #4a568c;
+  color: #8d98c4;
+  font-size: 9px;
+  line-height: 11px;
+  text-align: center;
+}
+
 .cell.shadow img { filter: brightness(.2) opacity(.55); }
 .cell.shiny { border-color: var(--r5); }
 .cell.legendary { border-color: rgba(255, 204, 77, .45); }
-.shiny-star { position: absolute; bottom: 22px; right: 6px; color: var(--r5); font-size: 11px; }
+
+/* Shiny ownership, marked in both views. */
+.cell.has-shiny { border-color: rgba(255, 204, 77, .55); }
+.shiny-star {
+  position: absolute;
+  top: 3px; left: 3px;
+  color: var(--r5);
+  font-size: 11px;
+  text-shadow: 0 0 4px rgba(255, 204, 77, .9);
+}
+.cell.shiny .shiny-star, .cell.has-shiny .shiny-star { z-index: 2; }
+
+/* The key under the header. */
+.collection-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.lg-item { display: inline-flex; align-items: center; gap: 4px; }
+.lg-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-style: normal;
+}
+.lg-chip.lg-shiny { color: var(--r5); border: 1px solid rgba(255, 204, 77, .55); }
+.lg-chip.lg-unseen { color: #8d98c4; border: 1px dashed #4a568c; }
+.lg-chip.lg-seal { border: 1px dashed var(--r4); }
 
 /* Sealed: it cannot appear yet, which is a different thing from not having
    found it. Dimmer, dashed, and carrying a padlock so the two never read alike. */

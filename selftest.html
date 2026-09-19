@@ -2534,20 +2534,51 @@ async function run() {
 
   group('game: every mode has a reachable boss');
   {
+    /**
+     * Driven by actually catching things, not by setting gateArmed by hand.
+     *
+     * Setting the flag is what let a real bug through: _maybeArmGate looked up the
+     * base set's legendary *for a species type*, so on the Raid Vault — a table and
+     * not a type — the lookup came back empty and the gate never armed. Every check
+     * downstream still passed, because they had been handed an already-armed gate.
+     * The arming is the part that broke, so the arming is the part to exercise.
+     */
     for (const t of MODE_KEYS) {
       await store.startFresh();
-      const g = new Game({});
+      const events = [];
+      const g = new Game({ onEvent: (ty, p) => events.push({ t: ty, p }) });
       g.start(t);
       g.plungeRelease();
-      g.run.gateArmed = true;
+
+      let now = 800000;
+      for (let i = 0; i < GATE_CATCHES_NEEDED; i++) {
+        g.run.encounterArmed = true;
+        g._enterSaucer(g.ball);
+        g._lastNow = now; g._updateSaucer(now); now += 10000;
+        check(`${t}: encounter ${i + 1} started`, g.phase === PHASE.ENCOUNTER, g.phase);
+        g.sub.meter = 0;
+        g._updateEncounter(0.016);
+      }
+
+      check(`${t}: ${GATE_CATCHES_NEEDED} catches opened the gate`, g.run.gateArmed === true,
+            `catches=${g.run.catches} armed=${g.run.gateArmed}`);
+      check(`${t}: and it was announced`,
+            events.some(e => e.t === 'armed' && e.p.what === 'boss'));
+
       g._enterSaucer(g.ball);
-      g._lastNow = 800000;
-      g._updateSaucer(800000);
-      check(`${t} reaches its boss stage`, g.phase === PHASE.BOSS, g.phase);
+      g._lastNow = now; g._updateSaucer(now);
+      check(`${t}: the Well opens the boss stage`, g.phase === PHASE.BOSS, g.phase);
+      check(`${t}: on one of that table's own legendaries`,
+            allBossesForMode(t).some(b => b.id === g.sub.sp.id),
+            `${g.sub.sp.name} (${g.sub.sp.setKey})`);
+
       g.sub.meter = 0;
       g.sub.shielded = false;
+      strike(g);
       g._updateBoss(0.016);
-      check(`  ${t}'s legendary can be captured`, store.bossWins(t) === 1);
+      check(`${t}: its legendary can be captured`, store.bossWins(t) === 1,
+            String(store.bossWins(t)));
+      check(`${t}: and is registered`, store.isRegistered(g.run.caught.at(-1).speciesId));
     }
   }
 

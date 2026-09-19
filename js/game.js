@@ -1152,7 +1152,18 @@ export class Game {
   /** Three catches in one game open the Awakening Gate. */
   _maybeArmGate() {
     if (this.run.gateArmed || this.run.catches < GATE_CATCHES_NEEDED) return;
-    if (!bossOf(this.run.type)) return;      // this mode has no legendary
+
+    /**
+     * Asked of the table, not of a type.
+     *
+     * This read `bossOf(this.run.type)`, which is the base set's legendary *for a
+     * species type*. The Raid Vault is a table and not a type, so that lookup came
+     * back empty and the gate silently never armed — you could catch a dozen
+     * creatures there and never once be offered the boss. The five type tables
+     * happened to work because for them the mode key and the type are the same
+     * string, which is exactly the coincidence that hid it.
+     */
+    if (!this._pickBoss()) return;           // this table has no legendary
 
     this.run.gateArmed = true;
     this._award(SCORE.gateOpen, { mult: false });

@@ -340,6 +340,24 @@ async function run() {
     check('there are five type tabs',
           doc.querySelectorAll('#collection-body .type-tab').length === 5);
 
+    /**
+     * The three cell states have to be distinguishable without reading the code.
+     * A silhouette on its own was being taken for "a dark creature", so an
+     * unregistered cell now also carries a dashed edge and a ? badge, and a key
+     * under the header says what each mark means.
+     */
+    check('unregistered cells are marked, not just dimmed',
+          doc.querySelectorAll('#collection-body .cell.locked .unseen').length ===
+          doc.querySelectorAll('#collection-body .cell.locked').length,
+          `${doc.querySelectorAll('#collection-body .cell.locked .unseen').length} of ` +
+          `${doc.querySelectorAll('#collection-body .cell.locked').length}`);
+    check('and say so to a screen reader',
+          [...doc.querySelectorAll('#collection-body .cell.locked')]
+            .every(c => /not registered/i.test(c.getAttribute('aria-label') || '')));
+    check('there is a key for the marks',
+          doc.querySelectorAll('#collection-body .collection-legend .lg-item').length === 3,
+          String(doc.querySelectorAll('#collection-body .collection-legend .lg-item').length));
+
     /* ---- the two creature sets ---- */
     const setTabs = () => [...doc.querySelectorAll('#collection-body .set-tab')];
     check('there are three set tabs', setTabs().length === 3, `${setTabs().length} tabs`);
@@ -367,6 +385,9 @@ async function run() {
     check('locked creatures are sealed, not merely unregistered',
           doc.querySelectorAll('#collection-body .cell.sealed').length > 0,
           `${doc.querySelectorAll('#collection-body .cell.sealed').length} sealed`);
+    check('a sealed cell carries a padlock rather than a question mark',
+          !!doc.querySelector('#collection-body .cell.sealed .seal') &&
+          !doc.querySelector('#collection-body .cell.sealed .unseen'));
     check('the Galactic legendary is sealed too',
           !!doc.querySelector('#collection-body .boss-chip.sealed'));
 
@@ -392,6 +413,79 @@ async function run() {
     await wait(300);
     check('and back to the base set', setTabs()[0].classList.contains('active'));
     check('which seals nothing', !doc.querySelector('#collection-body .cell.sealed'));
+
+    /**
+     * Registering a shiny, then checking the ordinary view shows it.
+     *
+     * Seeded by injecting a module into the frame rather than by playing until a
+     * shiny turns up, which is one chance in a hundred per encounter. A dynamic
+     * import from inside the frame resolves to the same module instances main.js
+     * is using — importing state.js out here would get a second, unrelated store
+     * and change nothing on screen.
+     *
+     * The gap this covers: shiny ownership used to be visible only after toggling
+     * to shiny mode, so there was no way to look at your Collection and see which
+     * of the creatures in it were shiny.
+     */
+    const seeded = await (async () => {
+      const s = doc.createElement('script');
+      s.type = 'module';
+      s.textContent = `
+        import { store } from './js/state.js';
+        import { DB } from './js/data.js';
+        const plain = DB.species.find(s => s.setKey === 'ea' && s.type === 'Neutral' && s.stage === 1);
+        const gold  = DB.species.find(s => s.setKey === 'ea' && s.type === 'Neutral' && s.stage === 1 && s !== plain);
+        store.recordCapture(plain.id, { shiny: false });
+        store.recordCapture(gold.id, { shiny: true });
+        window.__seed = { plain: plain.name, gold: gold.name };
+      `;
+      doc.body.appendChild(s);
+      for (let i = 0; i < 40 && !win.__seed; i++) await wait(50);
+      return win.__seed || null;
+    })();
+
+    check('the frame accepted a seeded save', !!seeded, JSON.stringify(seeded));
+
+    if (seeded) {
+      // Force a re-render by moving off the type and back.
+      const typeTabs = () => [...doc.querySelectorAll('#collection-body .type-tab')];
+      typeTabs()[1].click(); await wait(220);
+      typeTabs()[0].click(); await wait(260);
+
+      const cellFor = name => [...doc.querySelectorAll('#collection-body .cell')]
+        .find(c => (c.querySelector('.nm')?.textContent || '') === name) || null;
+
+      const gold = cellFor(seeded.gold);
+      const plain = cellFor(seeded.plain);
+
+      check('a registered creature shows its name', !!plain, seeded.plain);
+      check('and is no longer marked unregistered',
+            plain && !plain.classList.contains('locked') && !plain.querySelector('.unseen'));
+      check('a shiny is starred in the ordinary view too',
+            !!gold && gold.classList.contains('has-shiny') && !!gold.querySelector('.shiny-star'),
+            gold ? gold.className : 'no cell');
+      check('and one without a shiny is not',
+            plain && !plain.classList.contains('has-shiny') && !plain.querySelector('.shiny-star'));
+
+      /* The sheet has to say all three states outright, not imply them. */
+      gold?.click();
+      await wait(320);
+      const sheetText = doc.getElementById('species-body')?.textContent || '';
+      check('the species sheet says it is registered', /Registered/.test(sheetText));
+      check('and that the shiny is registered', /Shiny registered/.test(sheetText),
+            sheetText.slice(0, 120));
+      doc.querySelector('#sheet-species .sheet-close')?.click();
+      await wait(200);
+
+      const unknown = doc.querySelector('#collection-body .cell.locked');
+      unknown?.click();
+      await wait(320);
+      const unknownText = doc.getElementById('species-body')?.textContent || '';
+      check('an unregistered one says so', /Not registered/.test(unknownText),
+            unknownText.slice(0, 120));
+      doc.querySelector('#sheet-species .sheet-close')?.click();
+      await wait(200);
+    }
 
     // Switching type must re-render rather than throw.
     const tabs = doc.querySelectorAll('#collection-body .type-tab');

@@ -709,6 +709,34 @@ export class Renderer {
       ctx.fill();
     }
 
+    /**
+     * A shiny is called out on the table, not only in the HUD and the reveal.
+     *
+     * The gold aura alone was not enough: it is a tint behind a sprite, and on
+     * Cogwork Foundry the mode colour is already amber, so the one creature in a
+     * hundred you most want to know about looked like all the others. A ring of
+     * stars is unmistakable and costs nothing to draw.
+     */
+    if (e.shiny) {
+      ctx.save();
+      ctx.fillStyle = '#ffe680';
+      ctx.shadowColor = '#ffe680';
+      ctx.shadowBlur = this.effects ? 5 : 0;
+      ctx.font = '4.2px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      const spin = this.world.time * 0.9;
+      for (let i = 0; i < 5; i++) {
+        const a = spin + (i / 5) * TAU;
+        ctx.fillText('\u2605', e.x + Math.cos(a) * r * 1.45, e.y + Math.sin(a) * r * 1.45);
+      }
+
+      ctx.font = 'bold 4.6px system-ui, sans-serif';
+      ctx.fillText('SHINY', e.x, e.y - r * 1.5);
+      ctx.restore();
+    }
+
     if (spriteReady(img)) {
       ctx.save();
       if (e.flash > 0) {

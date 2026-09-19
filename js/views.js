@@ -47,8 +47,14 @@ const typeTag = type => el('span', { class: `tag t-${type}`, text: type });
  *
  * Three states, and they have to be visually distinct at a glance:
  *   registered            full art
- *   not registered        silhouette, name and type hidden
+ *   not registered        silhouette, dashed, a ? badge, name and type hidden
+ *   shiny registered      a gold star, in either view
  *   shiny mode, no shiny  silhouette of the *shiny* art
+ *   sealed                padlock, and it cannot appear yet at all
+ *
+ * The states have to be told apart at arm's length, which is why each one gets a
+ * badge and a border treatment rather than only a brightness change: a silhouette
+ * on its own was being read as "a dark creature".
  */
 function collectionCell(sp, { shinyMode, onOpen, sealed = false }) {
   const known = store.isRegistered(sp.id);
@@ -60,6 +66,10 @@ function collectionCell(sp, { shinyMode, onOpen, sealed = false }) {
   if (shinyMode) classes.push(got ? 'shiny' : 'shadow');
   else if (!known) classes.push('locked');
   if (isBoss) classes.push('legendary');
+  /* Shiny ownership is marked in the ordinary view too. It used to be visible
+     only after toggling to shiny mode, so there was no way to see at a glance
+     which of the creatures you had were shiny. */
+  if (!shinyMode && known && gotShiny) classes.push('has-shiny');
   /* Sealed is not the same as unregistered, and conflating them would be a lie:
      one means "you have not found it yet", the other "it cannot appear yet". */
   if (sealed && !known) classes.push('sealed');
@@ -76,19 +86,51 @@ function collectionCell(sp, { shinyMode, onOpen, sealed = false }) {
     img.addEventListener('error', () => { img.src = sp.imagePath; }, { once: true });
   }
 
+  /* Spelled out rather than left to colour alone, so a screen reader and a
+     colour-blind player get the same three states everyone else does. */
+  const label = sealed && !known ? `${sp.name}, not unlocked yet`
+    : !known ? 'Not registered yet'
+    : shinyMode
+      ? `${sp.name}, ${gotShiny ? 'shiny registered' : 'no shiny yet'}`
+      : `${sp.name}, registered${gotShiny ? ', shiny too' : ''}`;
+
   return el('button', {
     class: classes.join(' '),
     type: 'button',
-    'aria-label': known ? sp.name : 'Not yet registered',
+    'aria-label': label,
+    title: label,
     onclick: () => onOpen(sp)
   },
     rarityPip(sp.effectiveRarity),
-    shinyMode && got ? el('span', { class: 'shiny-star', text: '\u2605' }) : null,
-    sealed && !known ? el('span', { class: 'seal', text: '\u{1f512}' }) : null,
+    (shinyMode ? got : (known && gotShiny))
+      ? el('span', { class: 'shiny-star', text: '\u2605' })
+      : null,
+    sealed && !known ? el('span', { class: 'seal', text: '\u{1f512}' })
+      : !known ? el('span', { class: 'unseen', text: '?' })
+      : null,
     img,
-    el('span', { class: 'nm', text: known ? sp.name : '???' }),
-    el('span', { class: `sub ${got ? 't-' + sp.type : ''}`, text: got ? sp.type : (known ? sp.type : '???') }),
+    el('span', { class: 'nm', text: known ? sp.name : 'Not found' }),
+    el('span', { class: `sub ${got ? 't-' + sp.type : ''}`, text: got ? sp.type : (known ? sp.type : '\u2014') }),
     el('span', { class: 'stg', text: `S${sp.stage}` })
+  );
+}
+
+/**
+ * A key for the marks on the grid.
+ *
+ * On screen rather than in the guide, because the question it answers — "what does
+ * this cell mean" — is asked while looking at the cells.
+ */
+function collectionLegend(shinyMode) {
+  const item = (cls, glyph, text) => el('span', { class: 'lg-item' },
+    el('i', { class: `lg-chip ${cls}`, text: glyph }),
+    el('span', { text })
+  );
+
+  return el('div', { class: 'collection-legend small' },
+    item('lg-shiny', '\u2605', shinyMode ? 'shiny caught' : 'shiny in your Collection'),
+    item('lg-unseen', '?', 'not registered'),
+    item('lg-seal', '\u{1f512}', 'not unlocked yet')
   );
 }
 
@@ -291,7 +333,7 @@ export function renderCollection() {
       .map(sp => collectionCell(sp, { shinyMode, onOpen: openSpecies, sealed: sealedFor(sp) }))
   );
 
-  fill(body, setTabs, tabs, head, bar, gateNote, bossRow, grid);
+  fill(body, setTabs, tabs, head, bar, gateNote, bossRow, collectionLegend(shinyMode), grid);
 }
 
 /* ---------------------------------------------------------------
@@ -374,7 +416,16 @@ export function renderSpeciesSheet(sp) {
         el('span', { class: `tag r-${sp.effectiveRarity}`, text: RARITY_NAMES[sp.effectiveRarity] }),
         el('span', { class: 'tag', text: SETS[sp.setKey]?.short || sp.setKey }),
         isBoss ? el('span', { class: 'tag legend', text: '\u2726 Gate boss' }) : null,
-        shiny ? el('span', { class: 'tag shiny', text: '\u2605 Shiny' }) : null
+        /* Said outright in all three cases. The art alone cannot distinguish
+           "registered, no shiny" from "not registered at all". */
+        known
+          ? el('span', { class: 'tag ok', text: '\u2713 Registered' })
+          : el('span', { class: 'tag absent', text: '? Not registered' }),
+        known
+          ? (shiny
+              ? el('span', { class: 'tag shiny', text: '\u2605 Shiny registered' })
+              : el('span', { class: 'tag muted-tag', text: '\u2606 No shiny yet' }))
+          : null
       ),
       sealNote(sp),
       el('div', { class: 'sp-counts' },
@@ -1086,7 +1137,7 @@ export function renderGuide() {
       table(['Rarity', 'Chance', 'Hits', 'Time', 'Score'], rarityRows),
       para('Chance is relative weight, not a percentage, and it is spread across only the rarities that table actually has.'),
       defs([
-        ['Shiny', `Every creature rolled has a ${(SHINY_ODDS * 100).toFixed(0)}% chance of being shiny, a gate boss twice that, and everything doubles again once your score passes ${fmtScore(SHINY_DOUBLE_AT)}. Shinies are marked with a star, score a large bonus, and are tracked separately in your Collection.`],
+        ['Shiny', `Every creature rolled has a ${(SHINY_ODDS * 100).toFixed(0)}% chance of being shiny, a gate boss twice that, and everything doubles again once your score passes ${fmtScore(SHINY_DOUBLE_AT)}. You will not miss one: it is announced when it appears, ringed with stars on the table, the mode banner turns gold and says SHINY, and it scores a large bonus. Shinies are tracked separately in your Collection.`],
         ['If it gets away', 'Running out of time or losing the ball loses the creature. Nothing else is lost \u2014 arm another encounter and try again.'],
         ['The centre clears out', 'For as long as a creature is out, the table\u2019s centre gimmick fades and stops touching the ball entirely \u2014 no vines, no ring, no gears, no updraught. The Well goes quiet too. The upper playfield is yours, so a mode can never be lost to a blocked shot.'],
         ['Repeat hits', 'The creature ignores hits for a fifth of a second after each one, so leaning the ball on it does nothing. Every real contact counts, however fast the ball was moving.'],
@@ -1189,7 +1240,7 @@ export function renderGuide() {
       para('This is the only thing that lasts. Scores are recorded, but the creatures you caught in a game are not carried into the next one \u2014 what persists is the record that you caught them.'),
       defs([
         ['Registered', 'Catch or evolve a creature once and it is yours in the Collection forever, even if you never see it again.'],
-        ['Silhouettes', 'A creature you have not registered shows as a dark outline with its name hidden, so you can see what is still missing.'],
+        ['Reading the grid', 'A key sits under the header. A creature you have not registered is a dark outline with a dashed edge and a ? badge, and its name reads "Not found". A gold star means you have a shiny of it \u2014 shown in the ordinary view as well as the shiny one, so you can see at a glance which of yours are shiny. A padlock means it cannot appear yet at all, which is a different thing from not having found it.'],
         ['Shiny view', 'The star button switches the Collection to shiny mode, which tracks a separate set: which creatures you have caught a shiny of.'],
         ['Stages', 'Cells are grouped by stage, so a family reads down the grid. Tap any creature to see its whole line, including the parts you have not found.'],
         ['Backups', 'Profile has a save file link, a download and an import. Linking a file writes your Collection straight to device storage so it survives clearing browser data. Worth doing once.']
