@@ -26,7 +26,7 @@
    one.
    ============================================================ */
 
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v6';
 const CACHE_NAME = `pinball-creatures-${CACHE_VERSION}`;
 
 /**
