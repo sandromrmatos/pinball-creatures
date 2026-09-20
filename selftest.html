@@ -2349,6 +2349,70 @@ async function run() {
    * it is unlocked — a Galactic legendary appearing on a fresh save would hand
    * the player the reward for a Collection they have not finished.
    */
+  /**
+   * The badges the table shows over a creature.
+   *
+   * SHINY and NEW are decided in the view rather than in the renderer, so they are
+   * testable without a canvas. NEW is the useful one: it is what tells you whether
+   * to spend the ball, and it used to be discoverable only after the fact on the
+   * capture reveal.
+   */
+  group('game: the table flags shiny and unregistered creatures');
+  {
+    await store.startFresh();
+    const g2 = new Game({});
+    g2.start('Mystic');
+    g2.plungeRelease();
+
+    g2.run.encounterArmed = true;
+    g2._enterSaucer(g2.ball);
+    g2._lastNow = 1300000;
+    g2._updateSaucer(1300000);
+
+    const sp = g2.sub.sp;
+    check('an encounter is running', g2.phase === PHASE.ENCOUNTER, g2.phase);
+    check('an unregistered creature is flagged NEW', g2.view().encounter.isNew === true);
+
+    /* Registering it mid-encounter has to clear the flag: it is read live rather
+       than latched when the creature spawned. */
+    store.recordCapture(sp.id, { shiny: false });
+    check('and the flag clears once it is registered', g2.view().encounter.isNew === false);
+
+    check('shiny is reported as the roll made it',
+          g2.view().encounter.shiny === g2.sub.shiny, String(g2.view().encounter.shiny));
+
+    // Forced either way, since a real shiny is one roll in a hundred.
+    g2.sub.shiny = true;
+    check('a shiny reports as one', g2.view().encounter.shiny === true);
+    check('and its sprite is the shiny art',
+          g2.view().encounter.sprite === sp.shinyPath, g2.view().encounter.sprite);
+    g2.sub.shiny = false;
+    check('a plain one uses the ordinary art',
+          g2.view().encounter.sprite === sp.imagePath);
+
+    /* An evolution is judged on what it becomes, because that is what registers. */
+    await store.startFresh();
+    const g3 = new Game({});
+    g3.start('Mystic');
+    g3.plungeRelease();
+    const meditot = speciesByName('Meditot');
+    store.recordCapture(meditot.id, { shiny: false });      // already have the source
+    g3.run.caught.push({ uid: 'r1', speciesId: meditot.id, shiny: false });
+    g3.run.evolutionArmed = true;
+    g3._enterSaucer(g3.ball);
+    g3._lastNow = 1310000;
+    g3._updateSaucer(1310000);
+
+    check('an evolution is running', g3.phase === PHASE.EVOLUTION, g3.phase);
+    check('it is flagged NEW on the form it will become, not the one it is',
+          g3.view().encounter.isNew === true,
+          `from=${g3.sub.from.name} to=${g3.sub.to.name}`);
+    store.recordEvolution(g3.sub.to.id, { shiny: false });
+    check('and clears once that form is registered', g3.view().encounter.isNew === false);
+
+    await store.startFresh();
+  }
+
   group('game: the gate picks between two legendaries');
   {
     await store.startFresh();
@@ -3154,6 +3218,64 @@ async function run() {
     check('drawing after a resize is fine', resizeThrew === null, resizeThrew || '');
 
     canvas.remove();
+  }
+
+  /**
+   * Sprites must keep the shape they were drawn in.
+   *
+   * The downscaler used to force a square canvas and stretch the source into it.
+   * 19 of the 205 sources are not square — one is 677x369 — and every one came out
+   * visibly squashed. This checks the shipped files against the originals, so a
+   * regression in the tool is caught here rather than by noticing a fat creature.
+   */
+  group('sprites keep their aspect ratio');
+  {
+    const load = src => new Promise(res => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => res(null);
+      i.src = src;
+    });
+
+    let square = 0, oblong = 0, oversize = 0;
+    const bad = [];
+    const shapes = new Map();
+
+    /* In batches: the test server is single-threaded and 205 at once buries it. */
+    const all = DB.species.slice();
+    for (let i = 0; i < all.length; i += 8) {
+      const imgs = await Promise.all(all.slice(i, i + 8).map(sp => load(sp.imagePath)));
+      imgs.forEach((img, k) => {
+        const sp = all[i + k];
+        if (!img) { bad.push(`${sp.name}: would not load`); return; }
+        const w = img.naturalWidth, h = img.naturalHeight;
+        if (w === h) square++; else oblong++;
+        if (Math.max(w, h) !== 256) oversize++;
+        shapes.set(`${w}x${h}`, (shapes.get(`${w}x${h}`) || 0) + 1);
+      });
+    }
+
+    check('every sprite loaded', bad.length === 0, bad.slice(0, 4).join(', '));
+    check('the longest side is always 256', oversize === 0, `${oversize} wrong`);
+    check('and not everything is square', oblong > 0, `${oblong} non-square of ${square + oblong}`);
+    note(`sprite shapes: ${[...shapes].sort().map(([k, v]) => `${k}x${v}`).join('  ')}`);
+
+    /* The ones that were distorted before, checked by name against their known
+       source ratios so the numbers cannot quietly drift. */
+    const known = [
+      ['Tinkursuh', 677 / 369],
+      ['Pipelo', 1024 / 1536],
+      ['Florabouche', 1024 / 794],
+      ['Mindloch', 1024 / 1270]
+    ];
+    for (const [name, ratio] of known) {
+      const sp = speciesByName(name);
+      const img = sp ? await load(sp.imagePath) : null;
+      const got = img ? img.naturalWidth / img.naturalHeight : 0;
+      check(`${name} kept its shape`, img && Math.abs(got - ratio) < 0.02,
+            img ? `${img.naturalWidth}x${img.naturalHeight} = ${got.toFixed(3)}, want ${ratio.toFixed(3)}`
+                : 'no image');
+    }
   }
 
   group('render: sprite cache');

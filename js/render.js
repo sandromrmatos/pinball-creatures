@@ -710,30 +710,28 @@ export class Renderer {
     }
 
     /**
-     * A shiny is called out on the table, not only in the HUD and the reveal.
+     * A shiny gets a rainbow ring that cycles, on the circle the creature sits in.
      *
      * The gold aura alone was not enough: it is a tint behind a sprite, and on
      * Cogwork Foundry the mode colour is already amber, so the one creature in a
-     * hundred you most want to know about looked like all the others. A ring of
-     * stars is unmistakable and costs nothing to draw.
+     * hundred you most want to notice looked like all the others. A moving
+     * multi-coloured ring cannot be confused with any mode's palette, because no
+     * mode has more than one colour.
      */
     if (e.shiny) {
       ctx.save();
-      ctx.fillStyle = '#ffe680';
-      ctx.shadowColor = '#ffe680';
-      ctx.shadowBlur = this.effects ? 5 : 0;
-      ctx.font = '4.2px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-
-      const spin = this.world.time * 0.9;
-      for (let i = 0; i < 5; i++) {
-        const a = spin + (i / 5) * TAU;
-        ctx.fillText('\u2605', e.x + Math.cos(a) * r * 1.45, e.y + Math.sin(a) * r * 1.45);
+      const sweep = this.effects ? this.world.time * 1.4 : 0;
+      const segs = 12;
+      ctx.lineWidth = 1.1;
+      ctx.lineCap = 'butt';
+      for (let i = 0; i < segs; i++) {
+        const a0 = sweep + (i / segs) * TAU;
+        const hue = Math.round(((i / segs) * 360 + sweep * 60) % 360);
+        ctx.strokeStyle = `hsl(${hue} 95% 62%)`;
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, r * 1.3, a0, a0 + TAU / segs + 0.02);
+        ctx.stroke();
       }
-
-      ctx.font = 'bold 4.6px system-ui, sans-serif';
-      ctx.fillText('SHINY', e.x, e.y - r * 1.5);
       ctx.restore();
     }
 
@@ -744,7 +742,21 @@ export class Renderer {
         ctx.globalAlpha = 1;
         ctx.filter = `brightness(${1 + e.flash * 2.5})`;
       }
-      ctx.drawImage(img, e.x - r, e.y - r, r * 2, r * 2);
+
+      /**
+       * Letterboxed into the r*2 box rather than stretched to fill it.
+       *
+       * 19 of the sprites are not square — one is 677x369 — and drawing them into
+       * a square box squashed them. The box is what the capture meter and the
+       * rings are sized against, so the box stays square and the art is fitted
+       * inside it, exactly as object-fit: contain does everywhere else.
+       */
+      const iw = img.naturalWidth || img.width || 1;
+      const ih = img.naturalHeight || img.height || 1;
+      const k = Math.min((r * 2) / iw, (r * 2) / ih);
+      const dw = iw * k;
+      const dh = ih * k;
+      ctx.drawImage(img, e.x - dw / 2, e.y - dh / 2, dw, dh);
       ctx.restore();
     } else {
       // Silhouette until the sprite arrives, so the target is always visible.
@@ -769,6 +781,50 @@ export class Renderer {
       ctx.roundRect(e.x - w / 2, y, w * frac, h, h / 2);
       ctx.fillStyle = e.shiny ? '#ffe680' : this.mode.colour;
       ctx.fill();
+    }
+
+    /**
+     * SHINY and NEW, above the creature.
+     *
+     * NEW means "not in your Collection yet", which is the single most useful
+     * thing to know while deciding how hard to fight for something: a duplicate
+     * is worth points, a new one is worth the ball. It was previously only
+     * discoverable after the fact, on the capture reveal.
+     *
+     * Drawn last so nothing overlaps them, and on a dark plate so they stay
+     * legible over whatever the creature and the playfield happen to be.
+     */
+    if (e.shiny || e.isNew) {
+      const tags = [];
+      if (e.shiny) tags.push({ text: 'SHINY', bg: 'rgba(120,80,0,0.75)', fg: '#ffe680' });
+      if (e.isNew) tags.push({ text: 'NEW', bg: 'rgba(0,70,40,0.75)', fg: '#7dffb0' });
+
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 4.4px system-ui, sans-serif';
+
+      const gap = 1.4;
+      const widths = tags.map(t => ctx.measureText(t.text).width + 3);
+      const totalW = widths.reduce((s, v) => s + v, 0) + gap * (tags.length - 1);
+      const th = 6;
+      const ty = e.y - r * 1.42 - th / 2;
+
+      let tx = e.x - totalW / 2;
+      tags.forEach((t, i) => {
+        ctx.beginPath();
+        ctx.roundRect(tx, ty, widths[i], th, 1.6);
+        ctx.fillStyle = t.bg;
+        ctx.fill();
+        ctx.strokeStyle = t.fg;
+        ctx.lineWidth = 0.35;
+        ctx.stroke();
+
+        ctx.fillStyle = t.fg;
+        ctx.fillText(t.text, tx + widths[i] / 2, ty + th / 2 + 0.25);
+        tx += widths[i] + gap;
+      });
+      ctx.restore();
     }
 
     ctx.restore();

@@ -7,9 +7,12 @@
     phone — and this game has to work offline, so every sprite it uses must be
     precached.
 
-    Nothing on the table is ever drawn larger than about 120 CSS px, so 256x256
-    is already generous even at a 2x device pixel ratio. Re-encoding at that size
-    cuts the set to a few MB.
+    Nothing on the table is ever drawn larger than about 120 CSS px, so a 256 px
+    longest side is already generous even at a 2x device pixel ratio. Re-encoding
+    at that size cuts the set to a few MB.
+
+    -Size caps the longest side and the other is scaled to match: a non-square
+    source stays non-square. See Resize-Png.
 
     Every set CSV in the project root is walked, so adding a set means dropping
     its CSV in and re-running. Both sets share `images/` and `shiny/`: their
@@ -79,7 +82,19 @@ if ($dupes.Count) {
 $all = @($files.Keys)
 Write-Host "$($all.Count) unique sprites across $($Sets.Count) set(s)" -ForegroundColor Cyan
 
-<#  Resize one PNG, preserving transparency.
+<#  Resize one PNG, preserving transparency and shape.
+
+    `Edge` caps the LONGEST side; the other is scaled to match, so the aspect
+    ratio is kept and the output is only square when the input was.
+
+    This used to force a square $Edge x $Edge canvas and stretch the source into
+    it. 19 of the 205 sources are not square - Tinkursuh is 677x369, several are a
+    2:3 portrait - and every one of them came out visibly squashed or stretched.
+    The creatures looked fat.
+
+    Nothing downstream needs squares: every <img> that shows a sprite already uses
+    object-fit: contain, and the canvas letterboxes into its own box. See
+    Renderer._encounter.
 
     GDI+ needs a little coaxing to do this cleanly: a 32bpp ARGB target cleared
     to transparent, high quality resampling, and a TileFlipXY wrap mode so the
@@ -89,7 +104,12 @@ function Resize-Png {
 
     $src = [System.Drawing.Image]::FromFile($In)
     try {
-        $bmp = New-Object System.Drawing.Bitmap($Edge, $Edge, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        # Never upscale: a source already smaller than the cap is re-encoded as is.
+        $scale = [math]::Min(1.0, $Edge / [math]::Max($src.Width, $src.Height))
+        $w = [math]::Max(1, [int][math]::Round($src.Width  * $scale))
+        $h = [math]::Max(1, [int][math]::Round($src.Height * $scale))
+
+        $bmp = New-Object System.Drawing.Bitmap($w, $h, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
         try {
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             try {
@@ -102,7 +122,7 @@ function Resize-Png {
                 $attr = New-Object System.Drawing.Imaging.ImageAttributes
                 try {
                     $attr.SetWrapMode([System.Drawing.Drawing2D.WrapMode]::TileFlipXY)
-                    $rect = New-Object System.Drawing.Rectangle(0, 0, $Edge, $Edge)
+                    $rect = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
                     $g.DrawImage($src, $rect, 0, 0, $src.Width, $src.Height,
                                  [System.Drawing.GraphicsUnit]::Pixel, $attr)
                 } finally { $attr.Dispose() }
@@ -164,4 +184,28 @@ $report | Format-Table -AutoSize
 
 $totalIn  = ($report | Measure-Object 'MB in'  -Sum).Sum
 $totalOut = ($report | Measure-Object 'MB out' -Sum).Sum
-Write-Host ("Sprite set: {0} MB -> {1} MB at {2}x{2}" -f $totalIn, $totalOut, $Size) -ForegroundColor Green
+Write-Host ("Sprite set: {0} MB -> {1} MB, longest side {2} px" -f $totalIn, $totalOut, $Size) -ForegroundColor Green
+
+<#  Report anything whose shape changed in the re-encode, which should be nothing.
+    A mismatch here means the aspect ratio was not preserved. #>
+$bad = @()
+foreach ($name in $all) {
+    $i = Join-Path $Source "images\$name"
+    $o = Join-Path $root   "images\$name"
+    if (-not (Test-Path $i) -or -not (Test-Path $o)) { continue }
+    $si = [System.Drawing.Image]::FromFile($i)
+    $so = [System.Drawing.Image]::FromFile($o)
+    try {
+        $ri = $si.Width / $si.Height
+        $ro = $so.Width / $so.Height
+        if ([math]::Abs($ri - $ro) -gt 0.02) {
+            $bad += ('{0}: {1}x{2} -> {3}x{4}' -f $name, $si.Width, $si.Height, $so.Width, $so.Height)
+        }
+    } finally { $si.Dispose(); $so.Dispose() }
+}
+if ($bad.Count) {
+    Write-Warning "$($bad.Count) sprite(s) changed shape:"
+    $bad | Select-Object -First 10 | ForEach-Object { "  $_" }
+} else {
+    Write-Host 'Every sprite kept its aspect ratio.' -ForegroundColor Green
+}

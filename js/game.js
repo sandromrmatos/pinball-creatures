@@ -1776,6 +1776,16 @@ export class Game {
       encounter: s ? {
         sprite: s.shiny ? (s.sp || s.from).shinyPath : (s.sp || s.from).imagePath,
         shiny: s.shiny,
+        /**
+         * Whether this would be a new Collection entry.
+         *
+         * An evolution is judged on what it will *become*, because that is what
+         * gets registered — evolving something you already have into a form you do
+         * not is very much a new one. Read live rather than latched at spawn, so
+         * the badge disappears the moment it stops being true.
+         */
+        isNew: !store.isRegistered(
+          s.kind === 'evolution' ? s.to?.id : (s.sp || s.from)?.id),
         x: s.x, y: s.y, r: s.r,
         meterFrac: s.kind === 'evolution'
           ? s.shards / EVOLUTION_SHARDS

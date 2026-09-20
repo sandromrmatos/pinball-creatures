@@ -3,6 +3,13 @@
 *-out.txt
 selftest-result.json
 
+# Throwaway scripts and reports: reading a test result, probing a CSV, checking
+# what the deployed copy is serving. Inside the project rather than in %TEMP%
+# because the editor snapshots every file that is written, and it cannot build a
+# snapshot path for an absolute Windows path outside the workspace — the drive
+# letter lands in the middle of the path and mkdir fails.
+scratch/
+
 # OS and editor cruft
 Thumbs.db
 desktop.ini
